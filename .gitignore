@@ -2,6 +2,9 @@
 .sentinel/
 coverage.out
 /reviewer
+/vscode/dist/
+/vscode/node_modules/
+/vscode/*.vsix
 
 .env
 .env.*

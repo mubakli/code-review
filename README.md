@@ -1,13 +1,12 @@
 # Local-First Code Reviewer
 
-This project reviews staged Git changes before they are committed. The core is
-written in Go and is designed to work independently from the future VS Code
-extension.
+This project reviews staged Git changes before they are committed. The Go CLI
+works independently and a thin VS Code adapter exposes the same review through
+editor commands and the Problems panel.
 
-The current milestone is deliberately small: it establishes reliable staged
-diff ingestion, local path filtering, a common findings model, deterministic
-local analysis, and human or JSON CLI output. It does not contact an AI
-provider or read the whole repository.
+The implementation includes reliable staged diff ingestion, deterministic
+local analysis, optional AI review, human or JSON CLI output, and a minimal VS
+Code process adapter. It does not require whole-repository indexing.
 
 ## Current Workflow
 
@@ -72,8 +71,8 @@ errors. Findings do not block a commit in this milestone.
 
 AI review is opt-in. Provider and model are safe settings, but API keys are
 never accepted as command-line flags or repository configuration. The CLI
-currently reads the OpenAI key from `REVIEWER_OPENAI_API_KEY`; the future VS
-Code adapter will source it from `SecretStorage`.
+reads the OpenAI key from `REVIEWER_OPENAI_API_KEY`; the VS Code adapter sources
+it from `SecretStorage` and supplies it only for AI-enabled review.
 
 ## Default Exclusions
 
@@ -140,6 +139,8 @@ configuration will be added with the context engine.
   API keys.
 - `internal/output` renders stable JSON or terminal output.
 - `cmd/reviewer` is the composition root that selects concrete adapters.
+- `vscode` is the TypeScript process/UI adapter for settings, `SecretStorage`,
+  staged-review commands, and Problems panel diagnostics.
 
 This separation keeps the future TypeScript extension limited to process
 management, settings, secret storage, and VS Code diagnostics.
@@ -149,13 +150,15 @@ extension points, and the planned growth structure.
 
 ## Development
 
-The project currently has no third-party dependencies.
+The Go core has no third-party dependencies. The VS Code adapter uses
+development-only TypeScript and VS Code type packages.
 
 ```bash
 go test ./...
 go vet ./...
+cd vscode
+npm install
+npm test
 ```
 
-The next milestone is the minimal VS Code process adapter: secure key retrieval
-through `SecretStorage`, provider/model settings, the staged-review command,
-and diagnostics backed by the existing JSON result contract.
+See [`vscode/README.md`](vscode/README.md) for extension setup and commands.

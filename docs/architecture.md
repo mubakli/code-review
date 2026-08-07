@@ -41,6 +41,11 @@ internal/
   redact/                provider-egress secret redaction
   pathfilter/             repository-relative path matching
   output/                 human and JSON presentation
+
+vscode/
+  src/
+    extension.ts          process, settings, SecretStorage, diagnostics
+    protocol.ts           schema-versioned CLI result validation
 ```
 
 Future directories are intentionally not created until a concrete feature
@@ -181,9 +186,6 @@ internal/
   index/
   cache/
   protocol/
-
-vscode/
-  src/
 ```
 
 `contextengine` is used instead of `context` to avoid collisions with Go's
@@ -225,10 +227,12 @@ Provider implementations receive only:
 They do not receive repository handles, absolute repository paths, API keys,
 environment-file diffs, or permission to resolve additional files directly.
 
-API keys are runtime secrets, not configuration values. The CLI currently
-accepts the OpenAI key only through `REVIEWER_OPENAI_API_KEY`. The VS Code
-adapter will read keys from `SecretStorage` and pass them only to the local Go
-process. Provider and model names may be persisted because they are not secret.
+API keys are runtime secrets, not configuration values. The CLI accepts the
+OpenAI key only through `REVIEWER_OPENAI_API_KEY`. The VS Code adapter reads the
+key from `SecretStorage` and adds it only to an AI-enabled reviewer process.
+The Git adapter removes it before starting Git. Provider and model names may be
+persisted because they are not secret. AI egress also requires explicit
+repository/model approval in the extension.
 
 The OpenAI adapter uses the Responses API with `store: false`, strict JSON
 schema output, context-aware HTTP requests, HTTPS-only remote endpoints, and a
@@ -259,9 +263,9 @@ replace the deterministic title, message, or source.
 ## Wire Contracts
 
 `review.Result` currently doubles as the CLI JSON response. This is deliberate
-while the application is small. Before the VS Code extension depends on the
-schema, add golden protocol tests and treat field changes as schema-versioned
-migrations.
+while the application is small. The VS Code adapter accepts schema version 1
+and validates every summary and finding before publishing diagnostics. Future
+wire changes must use schema-versioned migrations and matching adapter tests.
 
 A separate protocol DTO should be introduced only when editor and CLI wire
 needs actually diverge from application values.
