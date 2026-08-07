@@ -1,4 +1,4 @@
-export const reviewSchemaVersion = 1;
+export const reviewSchemaVersion = 2;
 
 export type FindingSeverity = "critical" | "high" | "medium" | "low" | "info";
 
@@ -28,6 +28,7 @@ export interface ReviewSummary {
 export interface AIReviewSummary {
   provider: string;
   model: string;
+  reviewedFiles: string[];
   batchCount: number;
   successfulBatches: number;
   failedBatches: number;
@@ -35,9 +36,24 @@ export interface AIReviewSummary {
 
 export interface ReviewResult {
   schemaVersion: number;
+  reviewId: string;
   summary: ReviewSummary;
+  files: ReviewFile[];
   findings: ReviewFinding[];
   ai?: AIReviewSummary;
+}
+
+export interface ReviewFile {
+  path: string;
+  previousPath?: string;
+  status: "modified" | "added" | "deleted" | "renamed" | "copied";
+  binary?: boolean;
+}
+
+export interface SnapshotResult {
+  schemaVersion: number;
+  reviewId: string;
+  filesChanged: number;
 }
 
 const severities = new Set<FindingSeverity>(["critical", "high", "medium", "low", "info"]);
@@ -76,11 +92,50 @@ export function parseReviewResult(output: string): ReviewResult {
     throw new Error("summary.findingCount does not match findings length");
   }
 
+  if (!Array.isArray(root.files)) {
+    throw new Error("files must be an array");
+  }
   return {
     schemaVersion,
+    reviewId: reviewID(root.reviewId),
     summary,
+    files: root.files.map(parseReviewFile),
     findings,
     ai: root.ai === undefined ? undefined : parseAI(root.ai)
+  };
+}
+
+export function parseSnapshotResult(output: string): SnapshotResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(output);
+  } catch (error) {
+    throw new Error(`reviewer returned invalid snapshot JSON: ${errorMessage(error)}`);
+  }
+  const snapshot = record(value, "snapshot result");
+  const schemaVersion = integer(snapshot.schemaVersion, "schemaVersion");
+  if (schemaVersion !== reviewSchemaVersion) {
+    throw new Error(`unsupported review schema version ${schemaVersion}`);
+  }
+  return {
+    schemaVersion,
+    reviewId: reviewID(snapshot.reviewId),
+    filesChanged: nonNegativeInteger(snapshot.filesChanged, "filesChanged")
+  };
+}
+
+function parseReviewFile(value: unknown, index: number): ReviewFile {
+  const prefix = `files[${index}]`;
+  const file = record(value, prefix);
+  const status = text(file.status, `${prefix}.status`) as ReviewFile["status"];
+  if (!new Set(["modified", "added", "deleted", "renamed", "copied"]).has(status)) {
+    throw new Error(`${prefix}.status is unsupported`);
+  }
+  return {
+    path: singleLineText(file.path, `${prefix}.path`),
+    previousPath: file.previousPath === undefined ? undefined : singleLineText(file.previousPath, `${prefix}.previousPath`),
+    status,
+    binary: file.binary === undefined ? undefined : boolean(file.binary, `${prefix}.binary`)
   };
 }
 
@@ -127,10 +182,18 @@ function parseAI(value: unknown): AIReviewSummary {
   return {
     provider: text(ai.provider, "ai.provider"),
     model: text(ai.model, "ai.model"),
+    reviewedFiles: ai.reviewedFiles === undefined ? [] : textArray(ai.reviewedFiles, "ai.reviewedFiles"),
     batchCount: nonNegativeInteger(ai.batchCount, "ai.batchCount"),
     successfulBatches: nonNegativeInteger(ai.successfulBatches, "ai.successfulBatches"),
     failedBatches: nonNegativeInteger(ai.failedBatches, "ai.failedBatches")
   };
+}
+
+function textArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${name} must be an array`);
+  }
+  return value.map((entry, index) => singleLineText(entry, `${name}[${index}]`));
 }
 
 function record(value: unknown, name: string): Record<string, unknown> {
@@ -167,6 +230,21 @@ function finiteNumber(value: unknown, name: string): number {
     throw new Error(`${name} must be a finite number`);
   }
   return value;
+}
+
+function boolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${name} must be a boolean`);
+  }
+  return value;
+}
+
+function reviewID(value: unknown): string {
+  const result = singleLineText(value, "reviewId");
+  if (!/^sha256:[0-9a-f]{64}$/.test(result)) {
+    throw new Error("reviewId must be a SHA-256 identifier");
+  }
+  return result;
 }
 
 function integer(value: unknown, name: string): number {

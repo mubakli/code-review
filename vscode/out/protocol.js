@@ -2,7 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.reviewSchemaVersion = void 0;
 exports.parseReviewResult = parseReviewResult;
-exports.reviewSchemaVersion = 1;
+exports.parseSnapshotResult = parseSnapshotResult;
+exports.reviewSchemaVersion = 2;
 const severities = new Set(["critical", "high", "medium", "low", "info"]);
 const categories = new Set(["security", "performance", "database", "maintainability", "quality"]);
 const sources = new Set(["local-rule", "static-analysis", "sql-analyzer", "ai"]);
@@ -36,11 +37,49 @@ function parseReviewResult(output) {
     if (summary.findingCount !== findings.length) {
         throw new Error("summary.findingCount does not match findings length");
     }
+    if (!Array.isArray(root.files)) {
+        throw new Error("files must be an array");
+    }
     return {
         schemaVersion,
+        reviewId: reviewID(root.reviewId),
         summary,
+        files: root.files.map(parseReviewFile),
         findings,
         ai: root.ai === undefined ? undefined : parseAI(root.ai)
+    };
+}
+function parseSnapshotResult(output) {
+    let value;
+    try {
+        value = JSON.parse(output);
+    }
+    catch (error) {
+        throw new Error(`reviewer returned invalid snapshot JSON: ${errorMessage(error)}`);
+    }
+    const snapshot = record(value, "snapshot result");
+    const schemaVersion = integer(snapshot.schemaVersion, "schemaVersion");
+    if (schemaVersion !== exports.reviewSchemaVersion) {
+        throw new Error(`unsupported review schema version ${schemaVersion}`);
+    }
+    return {
+        schemaVersion,
+        reviewId: reviewID(snapshot.reviewId),
+        filesChanged: nonNegativeInteger(snapshot.filesChanged, "filesChanged")
+    };
+}
+function parseReviewFile(value, index) {
+    const prefix = `files[${index}]`;
+    const file = record(value, prefix);
+    const status = text(file.status, `${prefix}.status`);
+    if (!new Set(["modified", "added", "deleted", "renamed", "copied"]).has(status)) {
+        throw new Error(`${prefix}.status is unsupported`);
+    }
+    return {
+        path: singleLineText(file.path, `${prefix}.path`),
+        previousPath: file.previousPath === undefined ? undefined : singleLineText(file.previousPath, `${prefix}.previousPath`),
+        status,
+        binary: file.binary === undefined ? undefined : boolean(file.binary, `${prefix}.binary`)
     };
 }
 function parseFinding(value, index) {
@@ -85,10 +124,17 @@ function parseAI(value) {
     return {
         provider: text(ai.provider, "ai.provider"),
         model: text(ai.model, "ai.model"),
+        reviewedFiles: ai.reviewedFiles === undefined ? [] : textArray(ai.reviewedFiles, "ai.reviewedFiles"),
         batchCount: nonNegativeInteger(ai.batchCount, "ai.batchCount"),
         successfulBatches: nonNegativeInteger(ai.successfulBatches, "ai.successfulBatches"),
         failedBatches: nonNegativeInteger(ai.failedBatches, "ai.failedBatches")
     };
+}
+function textArray(value, name) {
+    if (!Array.isArray(value)) {
+        throw new Error(`${name} must be an array`);
+    }
+    return value.map((entry, index) => singleLineText(entry, `${name}[${index}]`));
 }
 function record(value, name) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -120,6 +166,19 @@ function finiteNumber(value, name) {
         throw new Error(`${name} must be a finite number`);
     }
     return value;
+}
+function boolean(value, name) {
+    if (typeof value !== "boolean") {
+        throw new Error(`${name} must be a boolean`);
+    }
+    return value;
+}
+function reviewID(value) {
+    const result = singleLineText(value, "reviewId");
+    if (!/^sha256:[0-9a-f]{64}$/.test(result)) {
+        throw new Error("reviewId must be a SHA-256 identifier");
+    }
+    return result;
 }
 function integer(value, name) {
     const result = finiteNumber(value, name);

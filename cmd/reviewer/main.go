@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,8 +13,10 @@ import (
 	"syscall"
 
 	"code-review/internal/config"
+	"code-review/internal/git"
 	"code-review/internal/output"
 	"code-review/internal/pathfilter"
+	"code-review/internal/review"
 )
 
 func main() {
@@ -31,6 +34,9 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 		writeUsage(stdout)
 		return 0
 	}
+	if arguments[0] == "snapshot" {
+		return runSnapshot(ctx, arguments[1:], stdout, stderr, workDirectory)
+	}
 	if arguments[0] != "review" {
 		fmt.Fprintf(stderr, "unknown command %q\n\n", arguments[0])
 		writeUsage(stderr)
@@ -44,6 +50,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 	repository := flags.String("repo", workDirectory, "path inside the Git repository")
 	aiProvider := flags.String("ai-provider", string(config.AIProviderNone), "AI provider: none or openai")
 	aiModel := flags.String("ai-model", "", "AI model name (required when AI is enabled)")
+	expectedReviewID := flags.String("expected-review-id", "", "reject review if the staged snapshot no longer matches this ID")
 	var excludes stringListFlag
 	flags.Var(&excludes, "exclude", "additional path pattern to exclude (repeatable)")
 	flags.Usage = func() {
@@ -77,7 +84,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 		return 2
 	}
 
-	result, err := reviewStaged(ctx, *repository, reviewOptions{ExtraExcludes: excludes, AI: aiConfig})
+	result, err := reviewStaged(ctx, *repository, reviewOptions{ExtraExcludes: excludes, AI: aiConfig, ExpectedID: *expectedReviewID})
 	if err != nil {
 		fmt.Fprintf(stderr, "review failed: %v\n", err)
 		return 1
@@ -94,11 +101,52 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 	return 0
 }
 
+func runSnapshot(ctx context.Context, arguments []string, stdout, stderr io.Writer, workDirectory string) int {
+	flags := flag.NewFlagSet("snapshot", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	staged := flags.Bool("staged", false, "identify changes staged in the Git index")
+	repositoryPath := flags.String("repo", workDirectory, "path inside the Git repository")
+	if err := flags.Parse(arguments); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if flags.NArg() != 0 || !*staged {
+		fmt.Fprintln(stderr, "snapshot requires --staged and accepts no positional arguments")
+		return 2
+	}
+	repository, err := git.Open(ctx, *repositoryPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "snapshot failed: %v\n", err)
+		return 1
+	}
+	snapshot, err := repository.StagedSnapshot(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "snapshot failed: %v\n", err)
+		return 1
+	}
+	if err := json.NewEncoder(stdout).Encode(struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		ReviewID      string `json:"reviewId"`
+		FilesChanged  int    `json:"filesChanged"`
+	}{
+		SchemaVersion: review.SchemaVersion,
+		ReviewID:      snapshot.ID,
+		FilesChanged:  len(snapshot.Changes.Files),
+	}); err != nil {
+		fmt.Fprintf(stderr, "snapshot failed: write JSON output: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func writeUsage(writer io.Writer) {
 	fmt.Fprintln(writer, "Local-first review of staged Git changes.")
 	fmt.Fprintln(writer)
 	fmt.Fprintln(writer, "Usage:")
 	fmt.Fprintln(writer, "  reviewer review --staged [--format human|json] [--repo PATH] [--exclude PATTERN] [--ai-provider PROVIDER --ai-model MODEL]")
+	fmt.Fprintln(writer, "  reviewer snapshot --staged [--repo PATH]")
 }
 
 type stringListFlag []string

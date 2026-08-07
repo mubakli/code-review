@@ -78,6 +78,45 @@ func TestStagedChangesSupportsRepositoryWithoutCommits(t *testing.T) {
 	}
 }
 
+func TestStagedSnapshotIDTracksOnlyIndexChanges(t *testing.T) {
+	requireGit(t)
+
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	filePath := filepath.Join(root, "main.go")
+	writeTestFile(t, filePath, "package main\n")
+	runTestGit(t, root, "add", "--", "main.go")
+	repository, err := Open(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	first, err := repository.StagedSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("StagedSnapshot() error = %v", err)
+	}
+	if !strings.HasPrefix(first.ID, "sha256:") {
+		t.Fatalf("snapshot ID = %q", first.ID)
+	}
+
+	writeTestFile(t, filePath, "package main\n\nconst unstaged = true\n")
+	unstaged, err := repository.StagedSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("StagedSnapshot() after working-tree change error = %v", err)
+	}
+	if unstaged.ID != first.ID {
+		t.Fatalf("unstaged edit changed snapshot ID: %q != %q", unstaged.ID, first.ID)
+	}
+
+	runTestGit(t, root, "add", "--", "main.go")
+	second, err := repository.StagedSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("StagedSnapshot() after staging error = %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatal("staged edit did not change snapshot ID")
+	}
+}
+
 func TestOpenOutsideRepository(t *testing.T) {
 	requireGit(t)
 

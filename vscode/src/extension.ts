@@ -1,10 +1,20 @@
 import { ChildProcess, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
+import { selectAIReview } from "./aiReview";
+import { AutoReviewScheduler, ScheduledSnapshot, SchedulerStatus } from "./autoReview";
 import { buildReviewerEnvironment } from "./environment";
+import { watchGitRepositories } from "./gitApi";
 import { resolveFindingPath } from "./paths";
-import { parseReviewResult, ReviewFinding, ReviewResult } from "./protocol";
+import {
+  parseReviewResult,
+  parseSnapshotResult,
+  ReviewFinding,
+  ReviewResult,
+  SnapshotResult
+} from "./protocol";
 import {
   baseContentScheme,
   indexContentScheme,
@@ -14,121 +24,222 @@ import {
   ReviewTreeProvider,
   StagedContentProvider
 } from "./reviewView";
-import { parseNameStatus, StagedFile } from "./stagedFiles";
+import { StagedFile } from "./stagedFiles";
 
 const reviewCommand = "code-review.reviewStaged";
+const setKeyCommand = "code-review.setOpenAIAPIKey";
+const clearKeyCommand = "code-review.clearOpenAIAPIKey";
+const pauseCommand = "code-review.pauseAutoReview";
+const resumeCommand = "code-review.resumeAutoReview";
+const openAIKeySecret = "code-review.openaiApiKey";
+const openAIKeyEnvironment = "REVIEWER_OPENAI_API_KEY";
 const maxOutputBytes = 32 * 1024 * 1024;
 const maxErrorBytes = 1024 * 1024;
 const activeChildren = new Set<ChildProcess>();
 
 interface ReviewSession {
   environment: NodeJS.ProcessEnv;
+  executable: string;
   repositoryRoot: string;
+  reviewId: string;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+interface ReviewConfiguration {
+  aiAutoReview: boolean;
+  aiEnabled: boolean;
+  autoReview: boolean;
+  debounceMs: number;
+  excludes: string[];
+  executable: string;
+  model: string;
+  provider: string;
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const diagnostics = vscode.languages.createDiagnosticCollection("code-review");
+  const diagnosticUris = new Map<string, Map<string, vscode.Uri>>();
   const reviewTree = new ReviewTreeProvider();
   const treeView = vscode.window.createTreeView(reviewViewID, { treeDataProvider: reviewTree });
   const stagedContent = new StagedContentProvider();
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  const output = vscode.window.createOutputChannel("Code Review", { log: true });
+  const knownRepositories = new Set<string>();
+  const interactiveRepositories = new Set<string>();
+  let currentSession: ReviewSession | undefined;
+  let paused = context.globalState.get<boolean>("autoReviewPaused", false);
+
   status.name = "Code Review";
-  status.text = "$(diff) Review Staged";
-  status.tooltip = "Review staged changes and open the staged diff";
-  status.command = reviewCommand;
+  status.command = "workbench.actions.view.problems";
+  setStatus(status, paused ? "Code Review: Paused" : "Code Review");
   status.show();
 
-  let running = false;
-  let session: ReviewSession | undefined;
+  const scheduler = new AutoReviewScheduler(
+    500,
+    async (repositoryRoot, signal) => {
+      const configuration = await readConfiguration(context, repositoryRoot);
+      const snapshot = await readSnapshot(repositoryRoot, configuration.executable, signal);
+      const hasKey = (await context.secrets.get(openAIKeySecret))?.trim() !== "";
+      return {
+        reviewId: snapshot.reviewId,
+        dedupeKey: [
+          snapshot.reviewId,
+          configuration.executable,
+          configuration.excludes.join("\0"),
+          configuration.aiEnabled,
+          configuration.aiAutoReview,
+          configuration.provider,
+          configuration.model,
+          hasKey
+        ].join("|")
+      };
+    },
+    async (repositoryRoot, snapshot, signal) => {
+      const interactive = interactiveRepositories.has(repositoryRoot);
+      const configuration = await readConfiguration(context, repositoryRoot);
+      clearRepositoryDiagnostics(diagnostics, diagnosticUris, repositoryRoot);
+      if (currentSession?.repositoryRoot === repositoryRoot) {
+        currentSession = undefined;
+        clearAIView(reviewTree, treeView, stagedContent);
+      }
+      const localResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, undefined, signal);
+      await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
+      publishDiagnostics(diagnostics, diagnosticUris, repositoryRoot, localResult);
+
+      const localCount = localResult.findings.length;
+      const shouldRunAI = configuration.aiEnabled
+        && configuration.provider === "openai"
+        && (interactive || configuration.aiAutoReview);
+      if (!shouldRunAI) {
+        clearAIView(reviewTree, treeView, stagedContent);
+        setFindingStatus(status, localCount);
+        return;
+      }
+
+      let apiKey = await context.secrets.get(openAIKeySecret);
+      if ((apiKey === undefined || apiKey.trim() === "") && interactive) {
+        apiKey = await getOrPromptForOpenAIKey(context.secrets);
+      }
+      const approved = interactive
+        ? await approveAIEgress(context.workspaceState, repositoryRoot, configuration.model)
+        : isAIEgressApproved(context.workspaceState, repositoryRoot, configuration.model);
+      if (apiKey === undefined || apiKey.trim() === "" || configuration.model === "" || !approved) {
+        clearAIView(reviewTree, treeView, stagedContent);
+        setFindingStatus(status, localCount);
+        return;
+      }
+
+      setStatus(status, `Code Review: ${localCount} local issue${localCount === 1 ? "" : "s"} · AI reviewing…`);
+      try {
+        const aiResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, apiKey, signal);
+        await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
+        publishDiagnostics(diagnostics, diagnosticUris, repositoryRoot, aiResult);
+        const aiReview = selectAIReview(aiResult, reviewedFiles(aiResult));
+        if (aiReview !== undefined) {
+          currentSession = {
+            environment: buildReviewerEnvironment(process.env),
+            executable: configuration.executable,
+            repositoryRoot,
+            reviewId: snapshot.reviewId
+          };
+          stagedContent.clear();
+          reviewTree.setReview(aiReview.files, aiReview.findings);
+          treeView.description = `${aiReview.files.length} AI-reviewed files, ${aiReview.findings.length} AI comments`;
+          treeView.message = aiReview.files.length === 0 ? "No files were sent to the AI provider." : undefined;
+          const firstTarget = aiReview.findings.length > 0 ? reviewTree.firstTarget() : undefined;
+          if (interactive && firstTarget !== undefined) {
+            await vscode.commands.executeCommand("workbench.view.scm");
+            await openStagedDiff(currentSession, firstTarget, stagedContent);
+          }
+        }
+        setFindingStatus(status, aiResult.findings.length);
+        if (aiResult.ai !== undefined && aiResult.ai.failedBatches > 0) {
+          setStatus(status, `Code Review: ${aiResult.findings.length} issues · AI partial`);
+        }
+      } catch (error) {
+        if (isCancellation(error, signal)) {
+          throw error;
+        }
+        output.error(`AI review failed for ${repositoryRoot}: ${displayError(error)}`);
+        setStatus(status, `Code Review: ${localCount} issues · AI unavailable`);
+      }
+    },
+    (_repository, schedulerStatus) => updateSchedulerStatus(status, schedulerStatus, paused),
+    (repository, error) => output.error(`Automatic review failed for ${repository}: ${displayError(error)}`)
+  );
 
   context.subscriptions.push(
     diagnostics,
+    output,
+    scheduler,
     treeView,
     status,
     vscode.workspace.registerTextDocumentContentProvider(baseContentScheme, stagedContent),
     vscode.workspace.registerTextDocumentContentProvider(indexContentScheme, stagedContent),
+    vscode.commands.registerCommand(setKeyCommand, async () => {
+      await setOpenAIKey(context.secrets);
+      notifyActiveRepository(scheduler, knownRepositories);
+    }),
+    vscode.commands.registerCommand(clearKeyCommand, async () => {
+      await clearOpenAIKey(context.secrets);
+      notifyActiveRepository(scheduler, knownRepositories);
+    }),
+    vscode.commands.registerCommand(pauseCommand, async () => {
+      paused = true;
+      await context.globalState.update("autoReviewPaused", true);
+      setStatus(status, "Code Review: Paused");
+    }),
+    vscode.commands.registerCommand(resumeCommand, async () => {
+      paused = false;
+      await context.globalState.update("autoReviewPaused", false);
+      setStatus(status, "Code Review: Waiting…");
+      for (const repository of knownRepositories) {
+        const configuration = await readConfiguration(context, repository);
+        if (configuration.autoReview) {
+          scheduler.notify(repository, configuration.debounceMs);
+        }
+      }
+    }),
     vscode.commands.registerCommand(openDiffCommand, async (target?: OpenDiffTarget) => {
-      if (target === undefined || session === undefined) {
-        void vscode.window.showInformationMessage("Run a staged review before opening its diff.");
+      if (target === undefined || currentSession === undefined) {
         return;
       }
-      await openStagedDiff(session, target, stagedContent);
+      await openStagedDiff(currentSession, target, stagedContent);
     }),
     vscode.commands.registerCommand(reviewCommand, async () => {
-      if (running) {
-        void vscode.window.showInformationMessage("A staged review is already running.");
+      const repositoryRoot = await activeRepositoryRoot();
+      knownRepositories.add(repositoryRoot);
+      interactiveRepositories.add(repositoryRoot);
+      try {
+        await scheduler.runNow(repositoryRoot);
+      } finally {
+        interactiveRepositories.delete(repositoryRoot);
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration(async event => {
+      if (!event.affectsConfiguration("codeReview")) {
         return;
       }
-      running = true;
-      status.text = "$(loading~spin) Reviewing Staged";
-      try {
-        const folder = selectWorkspaceFolder();
-        const configuration = vscode.workspace.getConfiguration("codeReview", folder.uri);
-        const binaryPath = configuration.get<string>("binaryPath")?.trim()
-          || path.join(context.extensionPath, "..", "reviewer");
-        const excludes = configuration.get<string[]>("exclude", []);
-        const environment = buildReviewerEnvironment(process.env);
-
-        const execution = await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: `Reviewing staged changes in ${folder.name}`,
-            cancellable: true
-          },
-          async (_progress, token) => {
-            const repositoryRoot = (await runProcess(
-              "git",
-              ["-C", folder.uri.fsPath, "rev-parse", "--show-toplevel"],
-              folder.uri.fsPath,
-              environment,
-              token,
-              64 * 1024
-            )).trim();
-            if (repositoryRoot === "" || !path.isAbsolute(repositoryRoot)) {
-              throw new Error("Git returned an invalid repository root");
-            }
-            const stagedFiles = await discoverStagedFiles(repositoryRoot, environment, token);
-            const args = ["review", "--staged", "--format", "json", "--repo", repositoryRoot];
-            for (const exclude of excludes) {
-              args.push("--exclude", exclude);
-            }
-            const output = await runProcess(
-              binaryPath,
-              args,
-              repositoryRoot,
-              environment,
-              token,
-              maxOutputBytes
-            );
-            return { repositoryRoot, result: parseReviewResult(output), stagedFiles };
-          }
-        );
-
-        session = { environment, repositoryRoot: execution.repositoryRoot };
-        stagedContent.clear();
-        applyDiagnostics(diagnostics, execution.result, folder.uri.fsPath);
-        reviewTree.setReview(execution.stagedFiles, execution.result.findings);
-        treeView.description = `${execution.stagedFiles.length} files, ${execution.result.findings.length} findings`;
-        treeView.message = execution.stagedFiles.length === 0 ? "No staged changes." : undefined;
-
-        const firstTarget = reviewTree.firstTarget();
-        if (firstTarget !== undefined) {
-          await vscode.commands.executeCommand("workbench.view.scm");
-          await openStagedDiff(session, firstTarget, stagedContent);
+      for (const repository of knownRepositories) {
+        const configuration = await readConfiguration(context, repository);
+        if (!paused && configuration.autoReview) {
+          scheduler.notify(repository, configuration.debounceMs);
         }
-        void vscode.window.showInformationMessage(
-          `Staged review complete: ${execution.result.findings.length} finding(s) across ${execution.stagedFiles.length} staged file(s).`
-        );
-      } catch (error) {
-        if (!(error instanceof vscode.CancellationError)) {
-          void vscode.window.showErrorMessage(`Code review failed: ${errorMessage(error)}`);
-        }
-      } finally {
-        running = false;
-        status.text = "$(diff) Review Staged";
       }
     })
   );
+
+  const gitWatcher = await watchGitRepositories(root => {
+    const repositoryRoot = root.fsPath;
+    knownRepositories.add(repositoryRoot);
+    if (paused) {
+      return;
+    }
+    const configuration = vscode.workspace.getConfiguration("codeReview", root);
+    if (configuration.get<boolean>("autoReview", true)) {
+      scheduler.notify(repositoryRoot, debounce(configuration.get<number>("debounceMs", 500)));
+    }
+  });
+  context.subscriptions.push(gitWatcher);
 }
 
 export function deactivate(): void {
@@ -136,6 +247,117 @@ export function deactivate(): void {
     child.kill();
   }
   activeChildren.clear();
+}
+
+async function readConfiguration(context: vscode.ExtensionContext, repositoryRoot: string): Promise<ReviewConfiguration> {
+  const uri = vscode.Uri.file(repositoryRoot);
+  const configuration = vscode.workspace.getConfiguration("codeReview", uri);
+  return {
+    aiAutoReview: configuration.get<boolean>("ai.autoReview", true),
+    aiEnabled: configuration.get<boolean>("ai.enabled", false),
+    autoReview: configuration.get<boolean>("autoReview", true),
+    debounceMs: debounce(configuration.get<number>("debounceMs", 500)),
+    excludes: configuration.get<string[]>("exclude", []),
+    executable: reviewerExecutable(configuration.get<string>("binaryPath")?.trim(), repositoryRoot, context.extensionPath),
+    model: configuration.get<string>("model", "").trim(),
+    provider: configuration.get<string>("provider", "none").trim()
+  };
+}
+
+function debounce(value: number): number {
+  return Math.max(300, Math.min(5000, value));
+}
+
+async function readSnapshot(repositoryRoot: string, executable: string, signal: AbortSignal): Promise<SnapshotResult> {
+  return withCancellation(signal, async token => parseSnapshotResult(await runProcess(
+    executable,
+    ["snapshot", "--staged", "--repo", repositoryRoot],
+    repositoryRoot,
+    buildReviewerEnvironment(process.env),
+    token,
+    64 * 1024
+  )));
+}
+
+async function runReviewPhase(
+  repositoryRoot: string,
+  reviewId: string,
+  configuration: ReviewConfiguration,
+  apiKey: string | undefined,
+  signal: AbortSignal
+): Promise<ReviewResult> {
+  const args = [
+    "review",
+    "--staged",
+    "--format",
+    "json",
+    "--repo",
+    repositoryRoot,
+    "--expected-review-id",
+    reviewId
+  ];
+  for (const exclude of configuration.excludes) {
+    args.push("--exclude", exclude);
+  }
+  const environment = buildReviewerEnvironment(process.env);
+  if (apiKey !== undefined) {
+    environment[openAIKeyEnvironment] = apiKey;
+    args.push("--ai-provider", configuration.provider, "--ai-model", configuration.model);
+  }
+  const result = await withCancellation(signal, async token => parseReviewResult(await runProcess(
+    configuration.executable,
+    args,
+    repositoryRoot,
+    environment,
+    token,
+    maxOutputBytes
+  )));
+  if (result.reviewId !== reviewId) {
+    throw abortError("review result belongs to a stale staged snapshot");
+  }
+  return result;
+}
+
+async function requireCurrentSnapshot(
+  repositoryRoot: string,
+  executable: string,
+  reviewId: string,
+  signal: AbortSignal
+): Promise<void> {
+  const current = await readSnapshot(repositoryRoot, executable, signal);
+  if (current.reviewId !== reviewId) {
+    throw abortError("staged snapshot changed while review was running");
+  }
+}
+
+function reviewedFiles(result: ReviewResult): StagedFile[] {
+  return result.files.map(file => ({
+    path: file.path,
+    previousPath: file.previousPath,
+    status: file.status
+  }));
+}
+
+async function activeRepositoryRoot(): Promise<string> {
+  const folder = selectWorkspaceFolder();
+  const environment = buildReviewerEnvironment(process.env);
+  const source = new vscode.CancellationTokenSource();
+  try {
+    const root = (await runProcess(
+      "git",
+      ["-C", folder.uri.fsPath, "rev-parse", "--show-toplevel"],
+      folder.uri.fsPath,
+      environment,
+      source.token,
+      64 * 1024
+    )).trim();
+    if (root === "" || !path.isAbsolute(root)) {
+      throw new Error("Git returned an invalid repository root");
+    }
+    return root;
+  } finally {
+    source.dispose();
+  }
 }
 
 function selectWorkspaceFolder(): vscode.WorkspaceFolder {
@@ -147,31 +369,17 @@ function selectWorkspaceFolder(): vscode.WorkspaceFolder {
   return (activeURI === undefined ? undefined : vscode.workspace.getWorkspaceFolder(activeURI)) ?? folders[0];
 }
 
-async function discoverStagedFiles(
-  repositoryRoot: string,
-  environment: NodeJS.ProcessEnv,
-  token: vscode.CancellationToken
-): Promise<StagedFile[]> {
-  const output = await runProcess(
-    "git",
-    [
-      "-C",
-      repositoryRoot,
-      "-c",
-      "core.quotePath=false",
-      "diff",
-      "--cached",
-      "--name-status",
-      "-z",
-      "--find-renames=50%",
-      "--"
-    ],
-    repositoryRoot,
-    environment,
-    token,
-    maxOutputBytes
-  );
-  return parseNameStatus(output);
+function reviewerExecutable(configured: string | undefined, repositoryRoot: string, extensionPath: string): string {
+  if (configured !== undefined && configured !== "") {
+    return configured;
+  }
+  const executableName = process.platform === "win32" ? "reviewer.exe" : "reviewer";
+  const repositoryBinary = path.join(repositoryRoot, executableName);
+  if (existsSync(repositoryBinary)) {
+    return repositoryBinary;
+  }
+  const developmentBinary = path.join(extensionPath, "..", executableName);
+  return existsSync(developmentBinary) ? developmentBinary : executableName;
 }
 
 async function openStagedDiff(
@@ -183,15 +391,27 @@ async function openStagedDiff(
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
-        title: `Opening staged diff for ${target.file.path}`,
+        title: `Opening AI review diff for ${target.file.path}`,
         cancellable: true
       },
       async (_progress, token) => {
+        const snapshot = parseSnapshotResult(await runProcess(
+          session.executable,
+          ["snapshot", "--staged", "--repo", session.repositoryRoot],
+          session.repositoryRoot,
+          session.environment,
+          token,
+          64 * 1024
+        ));
+        if (snapshot.reviewId !== session.reviewId) {
+          throw new Error("This AI review is stale; stage changes and wait for the new review");
+        }
         const basePath = target.file.previousPath ?? target.file.path;
-        const base = target.file.status.startsWith("A")
+        const status = target.file.status.toLowerCase();
+        const base = status.startsWith("a")
           ? ""
           : await readGitFile(session, `HEAD:${basePath}`, token);
-        const staged = target.file.status.startsWith("D")
+        const staged = status.startsWith("d")
           ? ""
           : await readGitFile(session, `:${target.file.path}`, token);
         if (base.includes("\0") || staged.includes("\0")) {
@@ -203,26 +423,19 @@ async function openStagedDiff(
           "vscode.diff",
           documents.base,
           documents.staged,
-          `${target.file.path} (HEAD ↔ Staged)`,
-          {
-            preview: true,
-            selection: new vscode.Range(line, 0, line, 0)
-          }
+          `${target.file.path} (AI Review: HEAD ↔ Staged)`,
+          { preview: true, selection: new vscode.Range(line, 0, line, 0) }
         );
       }
     );
   } catch (error) {
     if (!(error instanceof vscode.CancellationError)) {
-      void vscode.window.showWarningMessage(`Could not open staged diff: ${errorMessage(error)}`);
+      void vscode.window.showWarningMessage(`Could not open AI review diff: ${displayError(error)}`);
     }
   }
 }
 
-function readGitFile(
-  session: ReviewSession,
-  object: string,
-  token: vscode.CancellationToken
-): Promise<string> {
+function readGitFile(session: ReviewSession, object: string, token: vscode.CancellationToken): Promise<string> {
   return runProcess(
     "git",
     ["-C", session.repositoryRoot, "show", object],
@@ -233,11 +446,15 @@ function readGitFile(
   );
 }
 
-function applyDiagnostics(
+function publishDiagnostics(
   collection: vscode.DiagnosticCollection,
-  result: ReviewResult,
-  repositoryRoot: string
+  diagnosticUris: Map<string, Map<string, vscode.Uri>>,
+  repositoryRoot: string,
+  result: ReviewResult
 ): void {
+  for (const uri of diagnosticUris.get(repositoryRoot)?.values() ?? []) {
+    collection.delete(uri);
+  }
   const grouped = new Map<string, { uri: vscode.Uri; values: vscode.Diagnostic[] }>();
   for (const finding of result.findings) {
     const filePath = resolveFindingPath(repositoryRoot, finding.file);
@@ -250,10 +467,23 @@ function applyDiagnostics(
     entry.values.push(toDiagnostic(finding));
     grouped.set(key, entry);
   }
-  collection.clear();
-  for (const entry of grouped.values()) {
+  const current = new Map<string, vscode.Uri>();
+  for (const [key, entry] of grouped) {
     collection.set(entry.uri, entry.values);
+    current.set(key, entry.uri);
   }
+  diagnosticUris.set(repositoryRoot, current);
+}
+
+function clearRepositoryDiagnostics(
+  collection: vscode.DiagnosticCollection,
+  diagnosticUris: Map<string, Map<string, vscode.Uri>>,
+  repositoryRoot: string
+): void {
+  for (const uri of diagnosticUris.get(repositoryRoot)?.values() ?? []) {
+    collection.delete(uri);
+  }
+  diagnosticUris.delete(repositoryRoot);
 }
 
 function toDiagnostic(finding: ReviewFinding): vscode.Diagnostic {
@@ -281,6 +511,131 @@ function diagnosticSeverity(severity: ReviewFinding["severity"]): vscode.Diagnos
   }
 }
 
+function clearAIView(
+  reviewTree: ReviewTreeProvider,
+  treeView: vscode.TreeView<unknown>,
+  stagedContent: StagedContentProvider
+): void {
+  stagedContent.clear();
+  reviewTree.setReview([], []);
+  treeView.description = "Local rules only";
+  treeView.message = "AI-reviewed diffs appear here when optional AI review is configured.";
+}
+
+async function setOpenAIKey(secrets: vscode.SecretStorage): Promise<void> {
+  const value = await vscode.window.showInputBox({
+    title: "Code Review: OpenAI API Key",
+    prompt: "Stored in VS Code SecretStorage and passed only to AI-enabled reviewer processes.",
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: input => input.trim() === "" ? "API key must not be empty" : undefined
+  });
+  if (value !== undefined) {
+    await secrets.store(openAIKeySecret, value.trim());
+  }
+}
+
+async function clearOpenAIKey(secrets: vscode.SecretStorage): Promise<void> {
+  await secrets.delete(openAIKeySecret);
+}
+
+async function getOrPromptForOpenAIKey(secrets: vscode.SecretStorage): Promise<string | undefined> {
+  const stored = await secrets.get(openAIKeySecret);
+  if (stored !== undefined && stored.trim() !== "") {
+    return stored;
+  }
+  const selected = await vscode.window.showWarningMessage(
+    "AI review is not configured.",
+    "Set API Key"
+  );
+  if (selected !== "Set API Key") {
+    return undefined;
+  }
+  await setOpenAIKey(secrets);
+  return secrets.get(openAIKeySecret);
+}
+
+async function approveAIEgress(
+  state: vscode.Memento,
+  repositoryRoot: string,
+  model: string
+): Promise<boolean> {
+  if (isAIEgressApproved(state, repositoryRoot, model)) {
+    return true;
+  }
+  const selected = await vscode.window.showWarningMessage(
+    `Send eligible staged changes to OpenAI model ${model}? Environment files are excluded and secrets are redacted locally.`,
+    { modal: true },
+    "Allow AI Review"
+  );
+  if (selected !== "Allow AI Review") {
+    return false;
+  }
+  await state.update(approvalKey(repositoryRoot), `openai:${model}`);
+  return true;
+}
+
+function isAIEgressApproved(state: vscode.Memento, repositoryRoot: string, model: string): boolean {
+  return state.get<string>(approvalKey(repositoryRoot)) === `openai:${model}`;
+}
+
+function approvalKey(repositoryRoot: string): string {
+  return `aiEgressApproval:${vscode.Uri.file(repositoryRoot).toString()}`;
+}
+
+function setStatus(status: vscode.StatusBarItem, text: string): void {
+  status.text = text;
+  status.tooltip = text;
+}
+
+function setFindingStatus(status: vscode.StatusBarItem, count: number): void {
+  setStatus(status, count === 0 ? "Code Review: $(check) Clean" : `Code Review: ${count} issues`);
+}
+
+function updateSchedulerStatus(status: vscode.StatusBarItem, state: SchedulerStatus, paused: boolean): void {
+  if (paused) {
+    return;
+  }
+  switch (state) {
+    case "scheduled":
+      setStatus(status, "Code Review: Waiting…");
+      break;
+    case "reviewing":
+      setStatus(status, "Code Review: Reviewing…");
+      break;
+    case "error":
+      setStatus(status, "Code Review: Review failed");
+      break;
+    case "idle":
+    case "completed":
+      break;
+  }
+}
+
+function notifyActiveRepository(scheduler: AutoReviewScheduler, repositories: Set<string>): void {
+  for (const repository of repositories) {
+    scheduler.notify(repository, 300);
+  }
+}
+
+async function withCancellation<T>(
+  signal: AbortSignal,
+  action: (token: vscode.CancellationToken) => Promise<T>
+): Promise<T> {
+  const source = new vscode.CancellationTokenSource();
+  const cancel = (): void => source.cancel();
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) {
+    source.cancel();
+  }
+  try {
+    return await action(source.token);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    source.dispose();
+  }
+}
+
 function runProcess(
   executable: string,
   args: string[],
@@ -305,6 +660,7 @@ function runProcess(
     let settled = false;
     let stopError: Error | undefined;
     let cancellation: vscode.Disposable | undefined;
+    let forceKill: NodeJS.Timeout | undefined;
 
     const finish = (action: () => void): void => {
       if (settled) {
@@ -313,6 +669,9 @@ function runProcess(
       settled = true;
       activeChildren.delete(child);
       cancellation?.dispose();
+      if (forceKill !== undefined) {
+        clearTimeout(forceKill);
+      }
       action();
     };
     const stop = (error: Error): void => {
@@ -321,6 +680,8 @@ function runProcess(
       }
       stopError = error;
       child.kill("SIGTERM");
+      forceKill = setTimeout(() => child.kill("SIGKILL"), 5000);
+      forceKill.unref();
     };
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
@@ -365,6 +726,16 @@ function executableError(executable: string, error: Error): Error {
   return error;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function isCancellation(error: unknown, signal: AbortSignal): boolean {
+  return signal.aborted || error instanceof vscode.CancellationError || (error instanceof Error && error.name === "AbortError");
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function displayError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 1000);
 }

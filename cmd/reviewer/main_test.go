@@ -81,11 +81,54 @@ func TestRunReviewJSON(t *testing.T) {
 	if result.Summary.FilesReviewed != 1 || result.Summary.FindingCount != 1 {
 		t.Fatalf("result summary = %#v", result.Summary)
 	}
+	if !strings.HasPrefix(result.ReviewID, "sha256:") || len(result.Files) != 1 || result.Files[0].Path != "config.go" {
+		t.Fatalf("review identity/files = %q, %#v", result.ReviewID, result.Files)
+	}
 	if result.AI != nil {
 		t.Fatalf("AI metadata is present when AI is disabled: %#v", result.AI)
 	}
 	if result.Findings[0].File != "config.go" || result.Findings[0].StartLine != 3 {
 		t.Errorf("finding = %#v", result.Findings[0])
+	}
+}
+
+func TestRunSnapshotAndExpectedReviewID(t *testing.T) {
+	requireGit(t)
+
+	repository := t.TempDir()
+	runTestGit(t, repository, "init", "--quiet")
+	writeSource(t, repository, "main.go", "package main\n")
+	runTestGit(t, repository, "add", "--", "main.go")
+
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"snapshot", "--staged"}, &stdout, &stderr, repository); code != 0 {
+		t.Fatalf("snapshot exit code = %d; stderr = %s", code, stderr.String())
+	}
+	var snapshot struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		ReviewID      string `json:"reviewId"`
+		FilesChanged  int    `json:"filesChanged"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snapshot.SchemaVersion != review.SchemaVersion || !strings.HasPrefix(snapshot.ReviewID, "sha256:") || snapshot.FilesChanged != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+
+	writeSource(t, repository, "main.go", "package main\n\nconst changed = true\n")
+	runTestGit(t, repository, "add", "--", "main.go")
+	stdout.Reset()
+	stderr.Reset()
+	code := run(
+		context.Background(),
+		[]string{"review", "--staged", "--format", "json", "--expected-review-id", snapshot.ReviewID},
+		&stdout,
+		&stderr,
+		repository,
+	)
+	if code != 1 || !strings.Contains(stderr.String(), "staged snapshot changed") {
+		t.Fatalf("stale review code = %d, stderr = %s", code, stderr.String())
 	}
 }
 

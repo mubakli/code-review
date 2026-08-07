@@ -12,7 +12,12 @@
     "vscode": "^1.96.0"
   },
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:code-review.reviewStaged",
+    "onCommand:code-review.setOpenAIAPIKey",
+    "onCommand:code-review.clearOpenAIAPIKey",
+    "onCommand:code-review.pauseAutoReview",
+    "onCommand:code-review.resumeAutoReview",
     "onView:code-review.reviewView"
   ],
   "main": "./out/extension.js",
@@ -35,7 +40,27 @@
       },
       {
         "command": "code-review.openStagedDiff",
-        "title": "Open Staged Diff",
+        "title": "Open AI Review Diff",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.setOpenAIAPIKey",
+        "title": "Set OpenAI API Key",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.clearOpenAIAPIKey",
+        "title": "Clear OpenAI API Key",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.pauseAutoReview",
+        "title": "Pause Automatic Reviews",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.resumeAutoReview",
+        "title": "Resume Automatic Reviews",
         "category": "Code Review"
       }
     ],
@@ -43,14 +68,14 @@
       "scm": [
         {
           "id": "code-review.reviewView",
-          "name": "Staged Review"
+          "name": "AI Review"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "code-review.reviewView",
-        "contents": "Review staged changes and inspect findings in a side-by-side diff.\n[Run Staged Review](command:code-review.reviewStaged)"
+        "contents": "AI review diffs appear here after an AI-enabled staged review. Local-only findings stay in Problems.\n[Run Review](command:code-review.reviewStaged)"
       }
     ],
     "menus": {
@@ -84,6 +109,45 @@
           },
           "default": [],
           "description": "Additional path patterns to exclude"
+        },
+        "codeReview.provider": {
+          "type": "string",
+          "enum": ["none", "openai"],
+          "default": "none",
+          "scope": "resource",
+          "description": "Optional AI provider. Local review runs when set to none."
+        },
+        "codeReview.model": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "AI model name. Required when OpenAI is enabled."
+        },
+        "codeReview.autoReview": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Automatically review when the staged Git snapshot changes."
+        },
+        "codeReview.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "minimum": 300,
+          "maximum": 5000,
+          "scope": "resource",
+          "description": "Quiet period before automatic staged review starts."
+        },
+        "codeReview.ai.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Enable optional AI analysis after local review."
+        },
+        "codeReview.ai.autoReview": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Run configured AI analysis automatically after staged changes."
         }
       }
     }
@@ -92,7 +156,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "check": "tsc --noEmit -p ./",
-    "test": "npm run compile && node --test out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/stagedFiles.test.js",
+    "test": "npm run compile && node --test out/test/aiReview.test.js out/test/autoReview.test.js out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/stagedFiles.test.js",
     "test:integration": "npm run compile && node out/test/runTest.js",
     "test:all": "npm test && npm run test:integration",
     "vscode:prepublish": "npm run compile",

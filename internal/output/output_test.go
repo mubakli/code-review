@@ -31,7 +31,7 @@ func TestWriteJSONIncludesOptionalAISummary(t *testing.T) {
 	t.Parallel()
 
 	result := sampleResult()
-	result.AI = &review.AISummary{Provider: "openai", Model: "review-model", BatchCount: 2, SuccessfulBatches: 1, FailedBatches: 1}
+	result.AI = &review.AISummary{Provider: "openai", Model: "review-model", ReviewedFiles: []string{"main.go"}, BatchCount: 2, SuccessfulBatches: 1, FailedBatches: 1}
 	var output bytes.Buffer
 	if err := WriteJSON(&output, result); err != nil {
 		t.Fatalf("WriteJSON() error = %v", err)
@@ -40,7 +40,7 @@ func TestWriteJSONIncludesOptionalAISummary(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if decoded.AI == nil || decoded.AI.Provider != "openai" || decoded.AI.FailedBatches != 1 {
+	if decoded.AI == nil || decoded.AI.Provider != "openai" || decoded.AI.FailedBatches != 1 || len(decoded.AI.ReviewedFiles) != 1 {
 		t.Fatalf("decoded AI summary = %#v", decoded.AI)
 	}
 }

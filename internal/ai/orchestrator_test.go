@@ -69,6 +69,9 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 	if providerCalls != 1 || result.BatchCount != 1 || result.SuccessfulBatches != 1 || len(result.Failures) != 0 {
 		t.Fatalf("unexpected orchestration metadata: calls=%d result=%#v", providerCalls, result)
 	}
+	if len(result.ReviewedFiles) != 1 || result.ReviewedFiles[0] != "service.go" {
+		t.Fatalf("ReviewedFiles = %#v", result.ReviewedFiles)
+	}
 	if len(result.Findings) != 2 {
 		t.Fatalf("len(Findings) = %d, want 2: %#v", len(result.Findings), result.Findings)
 	}

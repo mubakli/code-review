@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseReviewResult } from "../protocol";
+import { parseReviewResult, parseSnapshotResult } from "../protocol";
 
 const validResult = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  reviewId: `sha256:${"a".repeat(64)}`,
   summary: {
     filesChanged: 1,
     filesReviewed: 1,
@@ -14,6 +15,7 @@ const validResult = {
     deletedLines: 0,
     findingCount: 1
   },
+  files: [{ path: "main.go", status: "modified" }],
   findings: [{
     file: "main.go",
     startLine: 3,
@@ -30,13 +32,13 @@ const validResult = {
 
 test("parseReviewResult accepts the CLI schema", () => {
   const result = parseReviewResult(JSON.stringify(validResult));
-  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.schemaVersion, 2);
   assert.equal(result.findings[0].file, "main.go");
 });
 
 test("parseReviewResult rejects unsupported schemas", () => {
   assert.throws(
-    () => parseReviewResult(JSON.stringify({ ...validResult, schemaVersion: 2 })),
+    () => parseReviewResult(JSON.stringify({ ...validResult, schemaVersion: 1 })),
     /unsupported review schema version/
   );
 });
@@ -61,5 +63,33 @@ test("parseReviewResult rejects unsupported finding sources", () => {
   assert.throws(
     () => parseReviewResult(JSON.stringify({ ...validResult, findings: [finding] })),
     /source is unsupported/
+  );
+});
+
+test("parseReviewResult accepts AI-reviewed file paths", () => {
+  const result = parseReviewResult(JSON.stringify({
+    ...validResult,
+    ai: {
+      provider: "openai",
+      model: "review-model",
+      reviewedFiles: ["main.go"],
+      batchCount: 1,
+      successfulBatches: 1,
+      failedBatches: 0
+    }
+  }));
+  assert.deepEqual(result.ai?.reviewedFiles, ["main.go"]);
+});
+
+test("parseSnapshotResult validates deterministic review IDs", () => {
+  const snapshot = parseSnapshotResult(JSON.stringify({
+    schemaVersion: 2,
+    reviewId: `sha256:${"b".repeat(64)}`,
+    filesChanged: 3
+  }));
+  assert.equal(snapshot.filesChanged, 3);
+  assert.throws(
+    () => parseSnapshotResult(JSON.stringify({ ...snapshot, reviewId: "not-a-hash" })),
+    /SHA-256 identifier/
   );
 });

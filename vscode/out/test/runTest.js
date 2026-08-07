@@ -56,9 +56,6 @@ async function main() {
             version: "1.96.4",
             extensionDevelopmentPath,
             extensionTestsPath,
-            extensionTestsEnv: {
-                REVIEWER_TEST_BINARY: reviewerPath
-            },
             launchArgs: [
                 fixtureRoot,
                 "--disable-extensions",

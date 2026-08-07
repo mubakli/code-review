@@ -90,7 +90,7 @@ class ReviewFileNode extends vscode.TreeItem {
     this.iconPath = new vscode.ThemeIcon("diff");
     this.command = {
       command: openDiffCommand,
-      title: "Open Staged Diff",
+      title: "Open AI Review Diff",
       arguments: [{ file, line: findings[0]?.startLine } satisfies OpenDiffTarget]
     };
     this.tooltip = `${file.path}\n${statusLabel(file.status)} staged change`;
@@ -106,7 +106,7 @@ class ReviewFindingNode extends vscode.TreeItem {
     this.iconPath = new vscode.ThemeIcon(severityIcon(finding.severity));
     this.command = {
       command: openDiffCommand,
-      title: "Open Finding in Staged Diff",
+      title: "Open AI Comment in Diff",
       arguments: [{ file, line: finding.startLine } satisfies OpenDiffTarget]
     };
     this.tooltip = `${finding.message}${finding.suggestion === undefined ? "" : `\n\nSuggestion: ${finding.suggestion}`}`;

@@ -199,6 +199,13 @@ The VS Code TypeScript layer remains a process and UI adapter. It starts the Go
 binary, stores API keys in `SecretStorage`, maps JSON findings to diagnostics,
 and manages settings. Review policy does not move into TypeScript.
 
+VS Code's built-in Git repository events are treated only as staged-state
+hints. After a trailing debounce, the adapter asks the Go CLI for the
+authoritative staged `reviewId`, derived from the same deterministic patch used
+for review. Running/completed IDs are deduplicated, changed IDs cancel stale
+work, and `--expected-review-id` prevents publication from a different index
+snapshot. Local review publishes before optional AI review starts.
+
 ## Review Scope Policy
 
 Path and binary filtering first creates the immutable local review scope through
@@ -253,6 +260,11 @@ field. The orchestrator assigns `SourceAI` only after validating:
 Provider errors, nil responses, and invalid batches are recorded as
 `BatchFailure` values. They do not remove local findings and do not stop later
 batches. Context cancellation and local batch-construction errors remain fatal.
+
+`AISummary.reviewedFiles` records the unique files in provider requests that
+were actually attempted. The VS Code adapter uses this list as the authority
+for its AI diff view; it does not infer provider egress from the raw staged file
+list. Local-only and AI-excluded files therefore remain outside that view.
 
 Local and AI findings are merged with deterministic findings as the primary
 record. Likely duplicates require the same file, category, overlapping lines,

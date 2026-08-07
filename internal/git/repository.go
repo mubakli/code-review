@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +29,11 @@ var (
 // Repository is a local Git worktree discovered from a starting directory.
 type Repository struct {
 	root string
+}
+
+type StagedSnapshot struct {
+	ID      string
+	Changes change.ChangeSet
 }
 
 // Open locates the worktree containing startDirectory.
@@ -70,15 +76,29 @@ func (r *Repository) Root() string {
 
 // StagedChanges returns parsed changes from the Git index.
 func (r *Repository) StagedChanges(ctx context.Context) (change.ChangeSet, error) {
-	patch, err := r.stagedDiff(ctx)
+	snapshot, err := r.StagedSnapshot(ctx)
 	if err != nil {
 		return change.ChangeSet{}, err
 	}
+	return snapshot.Changes, nil
+}
+
+// StagedSnapshot parses and identifies the exact deterministic patch read from
+// the index. Unstaged working-tree changes do not affect the identifier.
+func (r *Repository) StagedSnapshot(ctx context.Context) (StagedSnapshot, error) {
+	patch, err := r.stagedDiff(ctx)
+	if err != nil {
+		return StagedSnapshot{}, err
+	}
 	changes, err := Parse(patch)
 	if err != nil {
-		return change.ChangeSet{}, fmt.Errorf("parse staged diff: %w", err)
+		return StagedSnapshot{}, fmt.Errorf("parse staged diff: %w", err)
 	}
-	return changes, nil
+	digest := sha256.Sum256(patch)
+	return StagedSnapshot{
+		ID:      fmt.Sprintf("sha256:%x", digest),
+		Changes: changes,
+	}, nil
 }
 
 func (r *Repository) stagedDiff(ctx context.Context) ([]byte, error) {

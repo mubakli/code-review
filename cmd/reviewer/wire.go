@@ -22,6 +22,7 @@ type reviewOptions struct {
 	ExtraExcludes []string
 	AI            config.AI
 	Provider      ai.Provider
+	ExpectedID    string
 }
 
 // reviewStaged is the composition root for the staged-review use case. Concrete
@@ -34,10 +35,14 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 	if err != nil {
 		return review.Result{}, err
 	}
-	changes, err := repository.StagedChanges(ctx)
+	snapshot, err := repository.StagedSnapshot(ctx)
 	if err != nil {
 		return review.Result{}, err
 	}
+	if options.ExpectedID != "" && options.ExpectedID != snapshot.ID {
+		return review.Result{}, fmt.Errorf("staged snapshot changed: expected %s, found %s", options.ExpectedID, snapshot.ID)
+	}
+	changes := snapshot.Changes
 
 	patterns := pathfilter.DefaultPatterns()
 	patterns = append(patterns, options.ExtraExcludes...)
@@ -50,6 +55,7 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 		return review.Result{}, err
 	}
 	result, err := service.ReviewScope(ctx, scope)
+	result.ReviewID = snapshot.ID
 	if err != nil || !options.AI.Enabled() {
 		return result, err
 	}
@@ -86,6 +92,7 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 	result.AI = &review.AISummary{
 		Provider:          string(options.AI.Provider),
 		Model:             options.AI.Model,
+		ReviewedFiles:     append([]string(nil), aiResult.ReviewedFiles...),
 		BatchCount:        aiResult.BatchCount,
 		SuccessfulBatches: aiResult.SuccessfulBatches,
 		FailedBatches:     len(aiResult.Failures),

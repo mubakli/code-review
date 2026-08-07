@@ -15,6 +15,7 @@ type Orchestrator struct {
 
 type ReviewResult struct {
 	Findings          []findings.Finding
+	ReviewedFiles     []string
 	BatchCount        int
 	SuccessfulBatches int
 	Failures          []BatchFailure
@@ -37,8 +38,9 @@ func NewOrchestrator(builder Builder, provider Provider) (*Orchestrator, error) 
 // findings when individual batches fail or return invalid data.
 func (o *Orchestrator) Review(ctx context.Context, changes change.ChangeSet, localFindings []findings.Finding) (ReviewResult, error) {
 	result := ReviewResult{
-		Findings: findings.Merge(localFindings, nil),
-		Failures: make([]BatchFailure, 0),
+		Findings:      findings.Merge(localFindings, nil),
+		ReviewedFiles: make([]string, 0),
+		Failures:      make([]BatchFailure, 0),
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -57,6 +59,7 @@ func (o *Orchestrator) Review(ctx context.Context, changes change.ChangeSet, loc
 			result.Findings = findings.Merge(localFindings, aiFindings)
 			return result, err
 		}
+		result.ReviewedFiles = appendUnique(result.ReviewedFiles, batch.Files...)
 		response, err := o.provider.Analyze(ctx, batch.Request)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			result.Findings = findings.Merge(localFindings, aiFindings)
@@ -77,6 +80,21 @@ func (o *Orchestrator) Review(ctx context.Context, changes change.ChangeSet, loc
 
 	result.Findings = findings.Merge(localFindings, aiFindings)
 	return result, nil
+}
+
+func appendUnique(values []string, candidates ...string) []string {
+	existing := make(map[string]struct{}, len(values)+len(candidates))
+	for _, value := range values {
+		existing[value] = struct{}{}
+	}
+	for _, candidate := range candidates {
+		if _, found := existing[candidate]; found {
+			continue
+		}
+		existing[candidate] = struct{}{}
+		values = append(values, candidate)
+	}
+	return values
 }
 
 func validateResponse(response *AnalysisResponse, batchFiles []string, eligibleLines map[string]map[int]struct{}) ([]findings.Finding, error) {

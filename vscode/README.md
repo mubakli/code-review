@@ -1,24 +1,42 @@
 # Code Review for VS Code
 
-This extension reviews staged Git changes through the local `reviewer` CLI and
-presents the result as a staged diff workflow instead of a notification-only
-lint command.
+This extension reviews staged Git changes through the local `reviewer` CLI.
+Local deterministic rules publish Problems diagnostics without opening a diff.
+The side-by-side diff workflow is reserved for files actually sent to an AI
+provider.
 
 ## Setup
 
 1. Build the CLI from the repository root: `go build -o reviewer ./cmd/reviewer`.
-2. Set `codeReview.binaryPath` to that executable, or keep the binary at the
-   repository root while developing the extension.
-3. Open a local Git workspace and stage changes.
-4. Run **Code Review: Review Staged Changes** from the Command Palette, the
-   status bar, or the **Staged Review** view in Source Control.
+2. Keep the binary at the opened repository root. The extension detects it
+   automatically. `codeReview.binaryPath` is only needed for another location.
+3. Open a local Git workspace and stage changes. The extension reacts to the
+   staged snapshot automatically; no command is required.
 
-After review, VS Code opens a side-by-side `HEAD ↔ Staged` diff. The Source
-Control view lists every staged file and nests findings beneath its file.
-Selecting a finding reopens the staged diff at the reported line. Findings are
-also published to the Problems panel.
+`git add`, `git restore --staged`, `git reset`, and Source Control stage/unstage
+operations are observed through VS Code's Git repository state. Events are
+debounced and the CLI's deterministic `reviewId` prevents duplicate review of
+the same staged snapshot. **Code Review: Review Staged Changes** remains an
+explicit force re-run command.
+
+For local-only review, findings appear only in Problems. To enable AI review,
+set `codeReview.ai.enabled`, set `codeReview.provider` to `openai`, set
+`codeReview.model`, then run
+**Code Review: Set OpenAI API Key**. The key is stored in VS Code
+`SecretStorage`. The extension also asks for repository/model approval before
+the first provider request.
+
+After AI review, VS Code opens a side-by-side `HEAD ↔ Staged` diff. The Source
+Control **AI Review** view lists only files the CLI reports as sent to the
+provider and nests AI findings beneath each file. Environment files and other
+local-only changes do not enter this diff view. All local and AI findings remain
+available in Problems.
 
 Use `codeReview.exclude` for additional repository-relative exclusion patterns.
+Automatic review is controlled by `codeReview.autoReview` and
+`codeReview.debounceMs`. AI automation is independently controlled by
+`codeReview.ai.autoReview`. Use **Pause Automatic Reviews** and **Resume
+Automatic Reviews** for large staging sessions.
 
 ## Development
 

@@ -10,7 +10,7 @@ import (
 	"code-review/internal/pathfilter"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Summary struct {
 	FilesChanged  int `json:"filesChanged"`
@@ -25,14 +25,24 @@ type Summary struct {
 // Result is the stable envelope consumed by the CLI and future editor clients.
 type Result struct {
 	SchemaVersion int                `json:"schemaVersion"`
+	ReviewID      string             `json:"reviewId"`
 	Summary       Summary            `json:"summary"`
+	Files         []ReviewedFile     `json:"files"`
 	Findings      []findings.Finding `json:"findings"`
 	AI            *AISummary         `json:"ai,omitempty"`
+}
+
+type ReviewedFile struct {
+	Path         string `json:"path"`
+	PreviousPath string `json:"previousPath,omitempty"`
+	Status       string `json:"status"`
+	Binary       bool   `json:"binary,omitempty"`
 }
 
 type AISummary struct {
 	Provider          string      `json:"provider"`
 	Model             string      `json:"model"`
+	ReviewedFiles     []string    `json:"reviewedFiles"`
 	BatchCount        int         `json:"batchCount"`
 	SuccessfulBatches int         `json:"successfulBatches"`
 	FailedBatches     int         `json:"failedBatches"`
@@ -141,7 +151,20 @@ func (s *Service) ReviewScope(ctx context.Context, scope Scope) (Result, error) 
 	result := Result{
 		SchemaVersion: SchemaVersion,
 		Summary:       scope.summary,
+		Files:         make([]ReviewedFile, 0, len(scope.changes.Files)),
 		Findings:      make([]findings.Finding, 0),
+	}
+	for _, file := range scope.changes.Files {
+		previousPath := ""
+		if file.Status == change.StatusRenamed || file.Status == change.StatusCopied {
+			previousPath = file.OldPath
+		}
+		result.Files = append(result.Files, ReviewedFile{
+			Path:         file.Path(),
+			PreviousPath: previousPath,
+			Status:       string(file.Status),
+			Binary:       file.Binary,
+		})
 	}
 
 	for _, localAnalyzer := range s.analyzers {

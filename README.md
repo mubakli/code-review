@@ -59,6 +59,7 @@ provider only when AI review is explicitly enabled.
 go build -o reviewer ./cmd/reviewer
 ./reviewer review --staged
 ./reviewer review --staged --format json
+./reviewer snapshot --staged
 ./reviewer review --staged --repo /path/to/repository
 ./reviewer review --staged --exclude 'testdata/fixtures/'
 
@@ -68,6 +69,12 @@ export REVIEWER_OPENAI_API_KEY='your-key'
 
 The command returns a non-zero exit code for usage, Git, parsing, or analysis
 errors. Findings do not block a commit in this milestone.
+
+The VS Code adapter treats a staged snapshot change as the normal review
+trigger. Git/SCM events are debounced, then the CLI derives a deterministic
+`sha256:` review ID from the exact staged patch. Duplicate snapshots are
+skipped and stale local or AI results are cancelled or discarded. The manual
+review command remains available as a force re-run.
 
 AI review is opt-in. Provider and model are safe settings, but API keys are
 never accepted as command-line flags or repository configuration. The CLI
