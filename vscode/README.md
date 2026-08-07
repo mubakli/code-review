@@ -1,31 +1,24 @@
-# Local-First Code Reviewer for VS Code
+# Code Review for VS Code
 
-This extension is a thin adapter over the `reviewer` CLI. It reviews staged Git
-changes and publishes structured findings to the Problems panel.
+This extension reviews staged Git changes through the local `reviewer` CLI and
+presents the result as a staged diff workflow instead of a notification-only
+lint command.
 
 ## Setup
 
-1. Build the Go CLI: `go build -o reviewer ./cmd/reviewer`.
-2. Put `reviewer` on `PATH`, or set `localCodeReviewer.binaryPath` to the built
-   executable.
-3. Open the trusted local Git repository root as a workspace folder.
-4. Run **Local Code Reviewer: Review Staged Changes** from the Command Palette.
+1. Build the CLI from the repository root: `go build -o reviewer ./cmd/reviewer`.
+2. Set `codeReview.binaryPath` to that executable, or keep the binary at the
+   repository root while developing the extension.
+3. Open a local Git workspace and stage changes.
+4. Run **Code Review: Review Staged Changes** from the Command Palette, the
+   status bar, or the **Staged Review** view in Source Control.
 
-Local deterministic review is enabled by default. To enable OpenAI review, set
-`localCodeReviewer.provider` to `openai`, set `localCodeReviewer.model`, and run
-**Local Code Reviewer: Set OpenAI API Key**. The key is held in VS Code
-`SecretStorage` and is passed only to the reviewer subprocess for an AI-enabled
-review.
+After review, VS Code opens a side-by-side `HEAD ↔ Staged` diff. The Source
+Control view lists every staged file and nests findings beneath its file.
+Selecting a finding reopens the staged diff at the reported line. Findings are
+also published to the Problems panel.
 
-Use **Local Code Reviewer: Clear OpenAI API Key** to delete the stored key.
-
-The extension asks for explicit repository/model approval before its first AI
-review. It sends the key only to the reviewer process, and the reviewer removes
-it from Git subprocess environments. The extension itself is disabled for
-untrusted and virtual workspaces.
-
-Diagnostics refer to line numbers in the staged snapshot. Unstaged edits can
-shift working-tree lines, so restage and rerun the review after such changes.
+Use `codeReview.exclude` for additional repository-relative exclusion patterns.
 
 ## Development
 
@@ -36,7 +29,6 @@ npm run test:integration
 npm run package:vsix
 ```
 
-The integration test downloads VS Code 1.96.4 on first use, builds the real Go
-CLI, creates a temporary Git repository, and verifies that staged findings are
-published and cleared through the Problems diagnostics API. Packaging writes
-`local-code-reviewer-0.1.0.vsix` in this directory.
+The Extension Host test builds the real Go CLI, creates a temporary Git
+repository, and verifies staged diff navigation plus Problems diagnostics.
+Packaging writes `code-review-0.1.0.vsix` in this directory.

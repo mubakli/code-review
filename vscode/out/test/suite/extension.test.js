@@ -43,10 +43,10 @@ const promises_1 = require("node:fs/promises");
 const path = __importStar(require("node:path"));
 const vscode = __importStar(require("vscode"));
 const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
-const extensionID = "local-first-reviewer.local-code-reviewer";
-const diagnosticSource = "Local Code Reviewer (local-rule)";
-suite("Local Code Reviewer extension", () => {
-    test("publishes and clears staged-review diagnostics", async () => {
+const extensionID = "local.code-review";
+const diagnosticSource = "Code Review: local-rule";
+suite("Code Review extension", () => {
+    test("opens staged diffs and updates diagnostics", async () => {
         const folder = vscode.workspace.workspaceFolders?.[0];
         strict_1.default.ok(folder, "integration workspace folder is missing");
         const reviewerPath = process.env.REVIEWER_TEST_BINARY;
@@ -54,11 +54,13 @@ suite("Local Code Reviewer extension", () => {
         const extension = vscode.extensions.getExtension(extensionID);
         strict_1.default.ok(extension, `extension ${extensionID} is missing`);
         await extension.activate();
-        const configuration = vscode.workspace.getConfiguration("localCodeReviewer", folder.uri);
+        const configuration = vscode.workspace.getConfiguration("codeReview", folder.uri);
         await configuration.update("binaryPath", reviewerPath, vscode.ConfigurationTarget.Global);
-        await configuration.update("provider", "none", vscode.ConfigurationTarget.WorkspaceFolder);
-        await configuration.update("model", "", vscode.ConfigurationTarget.WorkspaceFolder);
-        await vscode.commands.executeCommand("localCodeReviewer.reviewStaged");
+        await vscode.commands.executeCommand("code-review.reviewStaged");
+        const stagedEditor = vscode.window.activeTextEditor;
+        strict_1.default.ok(stagedEditor, "staged diff editor did not open");
+        strict_1.default.equal(stagedEditor.document.uri.scheme, "code-review-index");
+        strict_1.default.match(stagedEditor.document.getText(), /actual-secret-value-123/);
         const sourceURI = vscode.Uri.file(path.join(folder.uri.fsPath, "main.go"));
         const findings = vscode.languages.getDiagnostics(sourceURI).filter(value => value.source === diagnosticSource);
         strict_1.default.equal(findings.length, 1);
@@ -67,7 +69,11 @@ suite("Local Code Reviewer extension", () => {
         strict_1.default.equal(findings[0].range.start.line, 2);
         await (0, promises_1.writeFile)(path.join(folder.uri.fsPath, "main.go"), "package sample\n\nconst safe = true\n", { mode: 0o600 });
         await execFileAsync("git", ["-C", folder.uri.fsPath, "add", "--", "main.go"]);
-        await vscode.commands.executeCommand("localCodeReviewer.reviewStaged");
+        await vscode.commands.executeCommand("code-review.reviewStaged");
+        const cleanStagedEditor = vscode.window.activeTextEditor;
+        strict_1.default.ok(cleanStagedEditor, "updated staged diff editor did not open");
+        strict_1.default.equal(cleanStagedEditor.document.uri.scheme, "code-review-index");
+        strict_1.default.match(cleanStagedEditor.document.getText(), /const safe = true/);
         const remaining = vscode.languages.getDiagnostics(sourceURI).filter(value => value.source === diagnosticSource);
         strict_1.default.equal(remaining.length, 0);
     });

@@ -3,26 +3,78 @@
   "displayName": "Code Review",
   "version": "0.1.0",
   "publisher": "local",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mubakli/code-review.git"
+  },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.96.0"
   },
   "activationEvents": [
-    "onCommand:code-review.reviewStaged"
+    "onCommand:code-review.reviewStaged",
+    "onView:code-review.reviewView"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The extension executes a local reviewer binary."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
   "contributes": {
     "commands": [
       {
         "command": "code-review.reviewStaged",
-        "title": "Review Staged Changes"
+        "title": "Review Staged Changes",
+        "category": "Code Review",
+        "icon": "$(play)"
+      },
+      {
+        "command": "code-review.openStagedDiff",
+        "title": "Open Staged Diff",
+        "category": "Code Review"
       }
     ],
+    "views": {
+      "scm": [
+        {
+          "id": "code-review.reviewView",
+          "name": "Staged Review"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "code-review.reviewView",
+        "contents": "Review staged changes and inspect findings in a side-by-side diff.\n[Run Staged Review](command:code-review.reviewStaged)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "code-review.reviewStaged",
+          "when": "view == code-review.reviewView",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "code-review.openStagedDiff",
+          "when": "false"
+        }
+      ]
+    },
     "configuration": {
       "title": "Code Review",
       "properties": {
         "codeReview.binaryPath": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "description": "Path to the reviewer binary"
         },
         "codeReview.exclude": {
@@ -38,13 +90,24 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "check": "tsc --noEmit -p ./",
+    "test": "npm run compile && node --test out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/stagedFiles.test.js",
+    "test:integration": "npm run compile && node out/test/runTest.js",
+    "test:all": "npm test && npm run test:integration",
+    "vscode:prepublish": "npm run compile",
+    "package:vsix": "npm run compile && vsce package --no-dependencies --skip-license --out code-review-0.1.0.vsix"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.1.2",
-    "@types/vscode": "^1.125.0",
+    "@types/vscode": "1.96.0",
     "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "3.9.2",
+    "mocha": "11.3.0",
     "typescript": "^5.3.0"
+  },
+  "overrides": {
+    "serialize-javascript": "7.0.5"
   }
 }
