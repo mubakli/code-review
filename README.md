@@ -77,11 +77,10 @@ Code adapter will source it from `SecretStorage`.
 
 ## Default Exclusions
 
-The local analyzer currently excludes binary patches and these paths:
+The local analyzer currently excludes binary patches and these generated or
+dependency paths:
 
 ```text
-.env
-.env.*
 node_modules/
 vendor/
 dist/
@@ -105,6 +104,9 @@ configuration will be added with the context engine.
 - External diff and text-conversion helpers are disabled.
 - Staged diff output is capped at 32 MiB to bound local memory usage.
 - Excluded and binary files do not enter local analyzers.
+- `.env` and `.env.*` files are analyzed locally for secrets but are never sent
+  to AI providers. Placeholder values in files such as `.env.example` are
+  ignored by the secret analyzer.
 - Findings are validated before output and secret values are never copied into
   finding messages.
 - AI request preparation redacts credential assignments, known provider tokens,
@@ -124,7 +126,8 @@ configuration will be added with the context engine.
 - `internal/change` defines the provider- and VCS-neutral changed-code model.
 - `internal/git` invokes Git directly with `exec.CommandContext`; it never
   constructs a shell command, and parses staged patches into `change` values.
-- `internal/pathfilter` applies privacy and generated-file exclusions.
+- `internal/pathfilter` applies generated-file exclusions and the stricter AI
+  egress policy.
 - `internal/review` owns the local-review use case and the small analyzer port.
 - `internal/analyzers/secrets` is a concrete deterministic analyzer.
 - `internal/findings` defines the shared finding contract.

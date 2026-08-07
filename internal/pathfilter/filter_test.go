@@ -10,8 +10,9 @@ func TestDefaultMatcher(t *testing.T) {
 		path     string
 		excluded bool
 	}{
-		{path: ".env", excluded: true},
-		{path: "config/.env.local", excluded: true},
+		{path: ".env", excluded: false},
+		{path: "config/.env.local", excluded: false},
+		{path: ".env.production", excluded: false},
 		{path: "web/node_modules/pkg/index.js", excluded: true},
 		{path: "service/generated/client.go", excluded: true},
 		{path: `web\dist\bundle.js`, excluded: true},
@@ -28,6 +29,20 @@ func TestDefaultMatcher(t *testing.T) {
 				t.Fatalf("Excludes(%q) = %t, want %t", test.path, got, test.excluded)
 			}
 		})
+	}
+}
+
+func TestDefaultAIEgressMatcher(t *testing.T) {
+	t.Parallel()
+
+	matcher := New(DefaultAIEgressPatterns())
+	for _, file := range []string{".env", ".env.local", "config/.env.production", ".env.example"} {
+		if !matcher.Excludes(file) {
+			t.Errorf("AI egress matcher did not exclude %q", file)
+		}
+	}
+	if matcher.Excludes("config/environment.go") {
+		t.Fatal("AI egress matcher excluded a normal source file")
 	}
 }
 

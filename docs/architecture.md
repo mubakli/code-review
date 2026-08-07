@@ -199,13 +199,16 @@ and manages settings. Review policy does not move into TypeScript.
 
 ## Review Scope Policy
 
-Path and binary filtering is review policy and must happen once before both
-local and AI analysis. `review.ScopeChanges` creates the shared immutable view.
-`ai.Builder` accepts that already scoped change set and only retains defensive
-pathless and binary checks.
+Path and binary filtering first creates the immutable local review scope through
+`review.ScopeChanges`. Local analyzers inspect all files in that scope,
+including `.env` and `.env.*`, so deterministic secret detection still runs on
+sensitive configuration.
 
-This prevents policy drift where excluded files reach AI but not local rules,
-or vice versa.
+The composition root applies a second, stricter AI egress policy before calling
+`ai.Orchestrator`. Environment files are removed from that provider-visible
+change set. `ai.Builder` accepts the egress-safe set and retains defensive
+pathless and binary checks. This asymmetry is intentional: sensitive files
+receive local analysis without leaving the machine.
 
 ## Privacy Boundary
 
@@ -220,7 +223,7 @@ Provider implementations receive only:
 - Relevant validated local findings.
 
 They do not receive repository handles, absolute repository paths, API keys,
-or permission to resolve additional files directly.
+environment-file diffs, or permission to resolve additional files directly.
 
 API keys are runtime secrets, not configuration values. The CLI currently
 accepts the OpenAI key only through `REVIEWER_OPENAI_API_KEY`. The VS Code

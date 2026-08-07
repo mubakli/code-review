@@ -32,7 +32,7 @@ func TestReviewChangesFiltersExcludedBinaryAndPathlessFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScopeChanges() error = %v", err)
 	}
-	if got := scope.Changes(); len(got.Files) != 1 || got.Files[0].Path() != "main.go" {
+	if got := scope.Changes(); len(got.Files) != 2 || got.Files[0].Path() != "main.go" || got.Files[1].Path() != ".env" {
 		t.Fatalf("scoped changes = %#v", got)
 	}
 	mutableCopy := scope.Changes()
@@ -44,7 +44,7 @@ func TestReviewChangesFiltersExcludedBinaryAndPathlessFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReviewChanges() error = %v", err)
 	}
-	if result.Summary.FilesChanged != 4 || result.Summary.FilesReviewed != 1 || result.Summary.FilesSkipped != 3 {
+	if result.Summary.FilesChanged != 4 || result.Summary.FilesReviewed != 2 || result.Summary.FilesSkipped != 2 {
 		t.Fatalf("Summary = %#v", result.Summary)
 	}
 	if result.Summary.AddedLines != 1 || result.Summary.DeletedLines != 1 || result.Summary.HunksReviewed != 1 {

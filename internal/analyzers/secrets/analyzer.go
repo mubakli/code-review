@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	privateKeyPattern    = regexp.MustCompile(`-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`)
-	knownTokenPattern    = regexp.MustCompile(`\b((AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})\b`)
-	literalSecretPattern = regexp.MustCompile("(?i)(api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd|secret)[\"'`]?\\s*(:=|=|:)\\s*[\"'`]([^\"'`]{8,})[\"'`]")
+	privateKeyPattern     = regexp.MustCompile(`-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`)
+	knownTokenPattern     = regexp.MustCompile(`\b((AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})\b`)
+	quotedSecretPattern   = regexp.MustCompile("(?i)(api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd|secret)[\"'`]?\\s*(:=|=|:)\\s*[\"'`]([^\"'`]+)[\"'`]")
+	unquotedSecretPattern = regexp.MustCompile("(?i)(api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd|secret)[\"'`]?\\s*(:=|=|:)\\s*([^\"'` \\t,;}\\]\\r\\n]+)")
 )
 
 type secretMatch struct {
@@ -83,8 +84,11 @@ func detectSecret(line string) (secretMatch, bool) {
 			confidence: 0.98,
 		}, true
 	}
-	matches := literalSecretPattern.FindStringSubmatch(line)
-	if len(matches) == 4 && !isPlaceholder(matches[3]) {
+	matches := quotedSecretPattern.FindStringSubmatch(line)
+	if len(matches) != 4 {
+		matches = unquotedSecretPattern.FindStringSubmatch(line)
+	}
+	if len(matches) == 4 && isLiteralSecret(matches[3]) {
 		return secretMatch{
 			severity:   findings.SeverityMedium,
 			title:      "Potential hardcoded secret",
@@ -95,23 +99,58 @@ func detectSecret(line string) (secretMatch, bool) {
 	return secretMatch{}, false
 }
 
+func isLiteralSecret(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 4 || isPlaceholder(value) {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "false", "none", "null", "test", "true", "undefined":
+		return false
+	default:
+		return true
+	}
+}
+
 func isPlaceholder(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(value, "<") && strings.HasSuffix(value, ">") {
+		return true
+	}
 	for _, marker := range []string{
 		"[redacted]",
 		"changeme",
 		"change-me",
-		"dummy-value",
+		"dummy",
 		"example",
 		"not-a-secret",
 		"placeholder",
-		"replace-me",
-		"your-api-key",
-		"your_api_key",
+		"replace_",
+		"replace-",
+		"replace with",
+		"your_",
+		"your-",
 	} {
 		if strings.Contains(value, marker) {
 			return true
 		}
 	}
-	return strings.HasPrefix(value, "${") || strings.HasPrefix(value, "{{")
+	for _, prefix := range []string{
+		"$",
+		"%",
+		"{{",
+		"config.",
+		"configuration",
+		"env.",
+		"getenv(",
+		"os.getenv",
+		"process.env",
+		"settings.",
+		"system.getenv",
+	} {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }

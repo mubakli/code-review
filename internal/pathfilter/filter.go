@@ -6,12 +6,10 @@ import (
 	"strings"
 )
 
-// DefaultPatterns returns the privacy and generated-file exclusions used when
-// no project configuration is present.
+// DefaultPatterns returns generated and dependency exclusions used for local
+// review. Environment files intentionally remain reviewable by local rules.
 func DefaultPatterns() []string {
 	return []string{
-		".env",
-		".env.*",
 		"node_modules/",
 		"vendor/",
 		"dist/",
@@ -21,6 +19,15 @@ func DefaultPatterns() []string {
 		"coverage/",
 		"generated/",
 		".git/",
+	}
+}
+
+// DefaultAIEgressPatterns identifies sensitive configuration files that local
+// analyzers should inspect but that should never be sent to an AI provider.
+func DefaultAIEgressPatterns() []string {
+	return []string{
+		".env",
+		".env.*",
 	}
 }
 

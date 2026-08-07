@@ -79,6 +79,34 @@ func TestDetectSecretIgnoresPlaceholders(t *testing.T) {
 	}
 }
 
+func TestDetectSecretEnvironmentAssignments(t *testing.T) {
+	t.Parallel()
+
+	detected := []string{
+		"DATABASE_PASSWORD=correct-horse-battery",
+		"AUTH_TOKEN=admin123",
+		"OPENAI_API_KEY=sk-actual-provider-secret-value",
+	}
+	for _, line := range detected {
+		if _, ok := detectSecret(line); !ok {
+			t.Errorf("detectSecret(%q) = false", line)
+		}
+	}
+	ignored := []string{
+		"DATABASE_PASSWORD=${DATABASE_PASSWORD}",
+		"DATABASE_PASSWORD=<database-password>",
+		"OPENAI_API_KEY=your-api-key",
+		"AUTH_TOKEN=placeholder",
+		"AUTH_TOKEN=replace_with_token",
+		"PASSWORD=test",
+	}
+	for _, line := range ignored {
+		if _, ok := detectSecret(line); ok {
+			t.Errorf("detectSecret(%q) = true", line)
+		}
+	}
+}
+
 func TestSecretAnalyzerHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
