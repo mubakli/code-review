@@ -159,6 +159,8 @@ go vet ./...
 cd vscode
 npm install
 npm test
+npm run test:integration
+npm run package:vsix
 ```
 
 See [`vscode/README.md`](vscode/README.md) for extension setup and commands.

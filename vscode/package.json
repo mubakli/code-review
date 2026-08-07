@@ -1,97 +1,50 @@
 {
-  "name": "local-code-reviewer",
-  "displayName": "Local-First Code Reviewer",
-  "description": "Reviews staged Git changes with the local-first reviewer CLI.",
+  "name": "code-review",
+  "displayName": "Code Review",
   "version": "0.1.0",
-  "publisher": "local-first-reviewer",
-  "license": "UNLICENSED",
+  "publisher": "local",
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.85.0"
   },
-  "categories": [
-    "Linters"
-  ],
   "activationEvents": [
-    "onCommand:localCodeReviewer.reviewStaged",
-    "onCommand:localCodeReviewer.setOpenAIAPIKey",
-    "onCommand:localCodeReviewer.clearOpenAIAPIKey"
+    "onCommand:code-review.reviewStaged"
   ],
-  "main": "./dist/extension.js",
-  "capabilities": {
-    "untrustedWorkspaces": {
-      "supported": false,
-      "description": "The extension executes a local review binary and may send redacted code to a configured AI provider."
-    },
-    "virtualWorkspaces": {
-      "supported": false,
-      "description": "Staged Git review requires a local filesystem worktree."
-    }
-  },
-  "files": [
-    "dist/*.js",
-    "dist/*.js.map",
-    "package.json",
-    "README.md"
-  ],
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "check": "tsc --noEmit -p ./",
-    "test": "npm run compile && node --test dist/test/environment.test.js dist/test/paths.test.js dist/test/protocol.test.js"
-  },
+  "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "localCodeReviewer.reviewStaged",
-        "title": "Review Staged Changes",
-        "category": "Local Code Reviewer"
-      },
-      {
-        "command": "localCodeReviewer.setOpenAIAPIKey",
-        "title": "Set OpenAI API Key",
-        "category": "Local Code Reviewer"
-      },
-      {
-        "command": "localCodeReviewer.clearOpenAIAPIKey",
-        "title": "Clear OpenAI API Key",
-        "category": "Local Code Reviewer"
+        "command": "code-review.reviewStaged",
+        "title": "Review Staged Changes"
       }
     ],
     "configuration": {
-      "title": "Local Code Reviewer",
+      "title": "Code Review",
       "properties": {
-        "localCodeReviewer.binaryPath": {
-          "type": "string",
-          "default": "reviewer",
-          "scope": "machine",
-          "description": "Path to the reviewer executable. The default resolves reviewer from PATH."
-        },
-        "localCodeReviewer.provider": {
-          "type": "string",
-          "enum": [
-            "none",
-            "openai"
-          ],
-          "enumDescriptions": [
-            "Run deterministic local analyzers only.",
-            "Also run the configured OpenAI model."
-          ],
-          "default": "none",
-          "scope": "resource",
-          "description": "Optional AI provider used for staged review."
-        },
-        "localCodeReviewer.model": {
+        "codeReview.binaryPath": {
           "type": "string",
           "default": "",
-          "scope": "resource",
-          "description": "AI model name. Required when the provider is openai."
+          "description": "Path to the reviewer binary"
+        },
+        "codeReview.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional path patterns to exclude"
         }
       }
     }
   },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
   "devDependencies": {
-    "@types/node": "22.10.0",
-    "@types/vscode": "1.96.0",
-    "typescript": "5.7.2"
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.1.2",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-electron": "^3.1.0",
+    "typescript": "^5.3.0"
   }
 }

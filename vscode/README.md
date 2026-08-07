@@ -32,4 +32,11 @@ shift working-tree lines, so restage and rerun the review after such changes.
 ```bash
 npm install
 npm test
+npm run test:integration
+npm run package:vsix
 ```
+
+The integration test downloads VS Code 1.96.4 on first use, builds the real Go
+CLI, creates a temporary Git repository, and verifies that staged findings are
+published and cleared through the Problems diagnostics API. Packaging writes
+`local-code-reviewer-0.1.0.vsix` in this directory.
