@@ -35,43 +35,70 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AICommentPresenter = void 0;
 const vscode = __importStar(require("vscode"));
+const paths_1 = require("./paths");
 class AICommentPresenter {
     controller = vscode.comments.createCommentController("code-review.ai-comments", "Code Review AI Comments");
-    threads = [];
-    show(uri, findings) {
-        this.clear();
+    sourceThreads = new Map();
+    previewThreads = [];
+    publishSource(repositoryRoot, findings, provider) {
+        this.clearSource(repositoryRoot);
+        const threads = [];
         for (const finding of findings) {
-            const line = Math.max(0, finding.startLine - 1);
-            const body = new vscode.MarkdownString();
-            body.appendMarkdown(`### ${finding.severity.toUpperCase()} · ${finding.category}\n\n`);
-            body.appendMarkdown(`**${escapeMarkdown(finding.title)}**\n\n`);
-            body.appendText(finding.message);
-            if (finding.suggestion !== undefined && finding.suggestion.trim() !== "") {
-                body.appendMarkdown("\n\n---\n\n**Suggested action**\n\n");
-                body.appendText(finding.suggestion);
+            const filePath = (0, paths_1.resolveFindingPath)(repositoryRoot, finding.file);
+            if (filePath === undefined) {
+                continue;
             }
-            body.appendMarkdown(`\n\n_Agent: ${escapeMarkdown(finding.agentId ?? "AI review")}_`);
-            const comment = {
-                body,
-                mode: vscode.CommentMode.Preview,
-                author: { name: `Code Review · ${finding.agentId ?? "AI"}` },
-                label: `${finding.severity} · ${finding.category}`
-            };
-            const thread = this.controller.createCommentThread(uri, new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER), [comment]);
-            thread.canReply = false;
-            thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-            this.threads.push(thread);
+            threads.push(this.createThread(vscode.Uri.file(filePath), finding, provider));
         }
+        this.sourceThreads.set(repositoryRoot, threads);
     }
-    clear() {
-        for (const thread of this.threads) {
+    showPreview(uri, findings, provider) {
+        this.clearPreview();
+        this.previewThreads = findings.map(finding => this.createThread(uri, finding, provider));
+    }
+    clearSource(repositoryRoot) {
+        for (const thread of this.sourceThreads.get(repositoryRoot) ?? []) {
             thread.dispose();
         }
-        this.threads = [];
+        this.sourceThreads.delete(repositoryRoot);
+    }
+    clearPreview() {
+        for (const thread of this.previewThreads) {
+            thread.dispose();
+        }
+        this.previewThreads = [];
+    }
+    clear() {
+        for (const repositoryRoot of this.sourceThreads.keys()) {
+            this.clearSource(repositoryRoot);
+        }
+        this.clearPreview();
     }
     dispose() {
         this.clear();
         this.controller.dispose();
+    }
+    createThread(uri, finding, provider) {
+        const line = Math.max(0, finding.startLine - 1);
+        const body = new vscode.MarkdownString();
+        body.appendMarkdown(`### ${finding.severity.toUpperCase()} · ${finding.category}\n\n`);
+        body.appendMarkdown(`**${escapeMarkdown(finding.title)}**\n\n`);
+        body.appendText(finding.message);
+        if (finding.suggestion !== undefined && finding.suggestion.trim() !== "") {
+            body.appendMarkdown("\n\n---\n\n**Suggested action**\n\n");
+            body.appendText(finding.suggestion);
+        }
+        body.appendMarkdown(`\n\n_${escapeMarkdown(provider)} · ${escapeMarkdown(finding.agentId ?? "AI review")}_`);
+        const comment = {
+            body,
+            mode: vscode.CommentMode.Preview,
+            author: { name: `${provider} · ${finding.agentId ?? "AI"}` },
+            label: `${finding.severity} · ${finding.category}`
+        };
+        const thread = this.controller.createCommentThread(uri, new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER), [comment]);
+        thread.canReply = false;
+        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+        return thread;
     }
 }
 exports.AICommentPresenter = AICommentPresenter;

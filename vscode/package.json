@@ -17,6 +17,8 @@
     "onCommand:code-review.setOpenAIAPIKey",
     "onCommand:code-review.clearOpenAIAPIKey",
     "onCommand:code-review.configureAIProvider",
+    "onCommand:code-review.selectAIModel",
+    "onCommand:code-review.manageAIKey",
     "onCommand:code-review.pauseAutoReview",
     "onCommand:code-review.resumeAutoReview",
     "onView:code-review.reviewView"
@@ -47,6 +49,16 @@
       {
         "command": "code-review.configureAIProvider",
         "title": "Configure AI Provider",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.selectAIModel",
+        "title": "Select AI Model",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.manageAIKey",
+        "title": "Manage AI API Key",
         "category": "Code Review"
       },
       {
@@ -82,8 +94,12 @@
     "views": {
       "code-review": [
         {
+          "id": "code-review.providerView",
+          "name": "AI Provider"
+        },
+        {
           "id": "code-review.reviewView",
-          "name": "AI Review"
+          "name": "Review Comments"
         }
       ]
     },
@@ -95,6 +111,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "code-review.configureAIProvider",
+          "when": "view == code-review.providerView",
+          "group": "navigation"
+        },
         {
           "command": "code-review.reviewStaged",
           "when": "view == code-review.reviewView",

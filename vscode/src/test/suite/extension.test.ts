@@ -17,6 +17,14 @@ suite("Code Review extension", () => {
     const extension = vscode.extensions.getExtension(extensionID);
     assert.ok(extension, `extension ${extensionID} is missing`);
     await extension.activate();
+    const commands = await vscode.commands.getCommands(true);
+    for (const command of [
+      "code-review.configureAIProvider",
+      "code-review.selectAIModel",
+      "code-review.manageAIKey"
+    ]) {
+      assert.ok(commands.includes(command), `command ${command} is missing`);
+    }
 
     const configuration = vscode.workspace.getConfiguration("codeReview", folder.uri);
     await configuration.update("binaryPath", "", vscode.ConfigurationTarget.Global);

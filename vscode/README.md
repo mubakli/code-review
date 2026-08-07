@@ -25,6 +25,15 @@ DeepSeek, offers recommended models or a custom model ID, stores the provider's
 API key in VS Code `SecretStorage`, and enables automatic AI review. Provider
 keys remain separate. Choosing **Local review only** disables external requests.
 
+The selected provider is always visible in two places:
+
+- Status Bar: `AI: DeepSeek · deepseek-chat` or `AI: Off`.
+- Code Review Activity Bar → **AI Provider**: provider, model, key status, and
+  automatic-review status.
+
+Click the provider status item or provider row to switch provider. Use the model
+and API-key rows for direct changes without repeating the full setup flow.
+
 After AI review, the dedicated **Code Review** Activity Bar view lists only
 files that contain actual AI comments; it is separate from Source Control's full
 Git change list. Selecting a comment opens a side-by-side `HEAD ↔ Staged` diff
@@ -32,6 +41,11 @@ and renders the explanation, suggested action, severity, category, and agent as
 an expanded native comment thread on the staged side. Environment files and
 local-only changes do not enter this view. All local and AI findings remain in
 Problems.
+
+AI completion also publishes persistent native comment threads on the matching
+working-tree source lines. Opening a reviewed file therefore shows the warning
+in the editor gutter and the readable provider/agent comment beside the code;
+the user does not need to navigate through the full Git diff first.
 
 AI findings identify the specialist that produced them. Correctness review runs
 for every eligible staged change; security review is selectively added when the
