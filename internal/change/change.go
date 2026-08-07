@@ -16,6 +16,19 @@ type ChangeSet struct {
 	Files []FileChange `json:"files"`
 }
 
+func (c ChangeSet) Clone() ChangeSet {
+	cloned := ChangeSet{Files: make([]FileChange, len(c.Files))}
+	for fileIndex, file := range c.Files {
+		cloned.Files[fileIndex] = file
+		cloned.Files[fileIndex].Hunks = make([]Hunk, len(file.Hunks))
+		for hunkIndex, hunk := range file.Hunks {
+			cloned.Files[fileIndex].Hunks[hunkIndex] = hunk
+			cloned.Files[fileIndex].Hunks[hunkIndex].Lines = append([]Line(nil), hunk.Lines...)
+		}
+	}
+	return cloned
+}
+
 // FileChange contains the hunks for one changed file.
 type FileChange struct {
 	OldPath string       `json:"oldPath,omitempty"`

@@ -34,6 +34,8 @@ internal/
     secrets/             concrete local secret analyzer
   findings/              shared finding contract and validation
   ai/                    provider port, safe requests, prompt batching
+    providers/
+      mock/              deterministic orchestration adapter
   redact/                provider-egress secret redaction
   pathfilter/             repository-relative path matching
   output/                 human and JSON presentation
@@ -192,8 +194,9 @@ and manages settings. Review policy does not move into TypeScript.
 ## Review Scope Policy
 
 Path and binary filtering is review policy and must happen once before both
-local and AI analysis. `ai.Builder` accepts an already scoped change set and
-only retains defensive pathless and binary checks.
+local and AI analysis. `review.ScopeChanges` creates the shared immutable view.
+`ai.Builder` accepts that already scoped change set and only retains defensive
+pathless and binary checks.
 
 This prevents policy drift where excluded files reach AI but not local rules,
 or vice versa.
@@ -212,6 +215,27 @@ Provider implementations receive only:
 
 They do not receive repository handles, absolute repository paths, API keys,
 or permission to resolve additional files directly.
+
+## AI Orchestration
+
+`ai.Orchestrator` executes token-budgeted batches through an injected
+`ai.Provider`. Provider responses use an AI-specific DTO without a source
+field. The orchestrator assigns `SourceAI` only after validating:
+
+- Response status.
+- Finding shape, enums, confidence, and line ranges.
+- Membership in the current batch.
+- A start line introduced by the scoped change set.
+
+Provider errors, nil responses, and invalid batches are recorded as
+`BatchFailure` values. They do not remove local findings and do not stop later
+batches. Context cancellation and local batch-construction errors remain fatal.
+
+Local and AI findings are merged with deterministic findings as the primary
+record. Likely duplicates require the same file, category, overlapping lines,
+and a matching issue concept or strong text similarity. A duplicate AI finding
+may raise severity or confidence and fill a missing suggestion, but it does not
+replace the deterministic title, message, or source.
 
 ## Wire Contracts
 

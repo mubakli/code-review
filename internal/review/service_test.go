@@ -28,7 +28,19 @@ func TestReviewChangesFiltersExcludedBinaryAndPathlessFiles(t *testing.T) {
 		{Status: change.StatusModified},
 	}}
 	service := New(pathfilter.New(pathfilter.DefaultPatterns()))
-	result, err := service.ReviewChanges(context.Background(), changes)
+	scope, err := service.ScopeChanges(context.Background(), changes)
+	if err != nil {
+		t.Fatalf("ScopeChanges() error = %v", err)
+	}
+	if got := scope.Changes(); len(got.Files) != 1 || got.Files[0].Path() != "main.go" {
+		t.Fatalf("scoped changes = %#v", got)
+	}
+	mutableCopy := scope.Changes()
+	mutableCopy.Files[0].Hunks[0].Lines[0].Content = "mutated"
+	if scope.Changes().Files[0].Hunks[0].Lines[0].Content == "mutated" {
+		t.Fatal("Scope.Changes() exposed mutable internal storage")
+	}
+	result, err := service.ReviewScope(context.Background(), scope)
 	if err != nil {
 		t.Fatalf("ReviewChanges() error = %v", err)
 	}

@@ -119,7 +119,8 @@ configuration will be added with the context engine.
 - `internal/findings` defines the shared finding contract.
 - `internal/redact` removes secret material before any future provider request.
 - `internal/ai` owns safe requests, token budgeting, batching, and the
-  vendor-neutral provider boundary. It has no provider implementation yet.
+  vendor-neutral provider boundary and resilient orchestration.
+- `internal/ai/providers/mock` provides deterministic orchestration tests.
 - `internal/output` renders stable JSON or terminal output.
 - `cmd/reviewer` is the composition root that selects concrete adapters.
 
@@ -138,8 +139,6 @@ go test ./...
 go vet ./...
 ```
 
-The next milestone is provider-independent AI orchestration with a mock
-provider: execute prepared batches, validate AI responses, merge them with
-local findings, deduplicate overlaps, and keep local review available when the
-provider fails. A real vendor integration can follow once that boundary is
-stable.
+The next milestone is the first real provider adapter plus provider/model
+configuration. It will remain opt-in, use a user-owned API key, and preserve
+local findings when the provider is unavailable.

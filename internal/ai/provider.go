@@ -59,7 +59,3 @@ func (r AnalysisRequest) MarshalJSON() ([]byte, error) {
 		StaticFindings: r.staticFindings,
 	})
 }
-
-type AnalysisResponse struct {
-	Findings []findings.Finding `json:"findings"`
-}
