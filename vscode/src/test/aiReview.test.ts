@@ -54,6 +54,26 @@ test("selectAIReview uses provider-reviewed paths and AI findings only", () => {
   assert.equal(selection?.findings[0].source, "ai");
 });
 
+test("selectAIReview does not list provider-reviewed files without comments", () => {
+  const result: ReviewResult = {
+    schemaVersion: 2,
+    reviewId: `sha256:${"c".repeat(64)}`,
+    summary: { ...summary, findingCount: 0 },
+    files: [{ path: "main.go", status: "modified" }],
+    findings: [],
+    ai: {
+      provider: "deepseek",
+      model: "deepseek-chat",
+      reviewedFiles: ["main.go"],
+      agents: ["correctness"],
+      batchCount: 1,
+      successfulBatches: 1,
+      failedBatches: 0
+    }
+  };
+  assert.deepEqual(selectAIReview(result, [{ path: "main.go", status: "M" }])?.files, []);
+});
+
 function finding(file: string, source: string) {
   return {
     file,

@@ -53,6 +53,25 @@ const summary = {
     strict_1.default.equal(selection?.findings.length, 1);
     strict_1.default.equal(selection?.findings[0].source, "ai");
 });
+(0, node_test_1.default)("selectAIReview does not list provider-reviewed files without comments", () => {
+    const result = {
+        schemaVersion: 2,
+        reviewId: `sha256:${"c".repeat(64)}`,
+        summary: { ...summary, findingCount: 0 },
+        files: [{ path: "main.go", status: "modified" }],
+        findings: [],
+        ai: {
+            provider: "deepseek",
+            model: "deepseek-chat",
+            reviewedFiles: ["main.go"],
+            agents: ["correctness"],
+            batchCount: 1,
+            successfulBatches: 1,
+            failedBatches: 0
+        }
+    };
+    strict_1.default.deepEqual((0, aiReview_1.selectAIReview)(result, [{ path: "main.go", status: "M" }])?.files, []);
+});
 function finding(file, source) {
     return {
         file,

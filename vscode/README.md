@@ -25,11 +25,13 @@ DeepSeek, offers recommended models or a custom model ID, stores the provider's
 API key in VS Code `SecretStorage`, and enables automatic AI review. Provider
 keys remain separate. Choosing **Local review only** disables external requests.
 
-After AI review, VS Code opens a side-by-side `HEAD ↔ Staged` diff. The Source
-Control **AI Review** view lists only files the CLI reports as sent to the
-provider and nests AI findings beneath each file. Environment files and other
-local-only changes do not enter this diff view. All local and AI findings remain
-available in Problems.
+After AI review, the dedicated **Code Review** Activity Bar view lists only
+files that contain actual AI comments; it is separate from Source Control's full
+Git change list. Selecting a comment opens a side-by-side `HEAD ↔ Staged` diff
+and renders the explanation, suggested action, severity, category, and agent as
+an expanded native comment thread on the staged side. Environment files and
+local-only changes do not enter this view. All local and AI findings remain in
+Problems.
 
 AI findings identify the specialist that produced them. Correctness review runs
 for every eligible staged change; security review is selectively added when the

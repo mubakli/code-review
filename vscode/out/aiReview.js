@@ -6,8 +6,10 @@ function selectAIReview(result, stagedFiles) {
         return undefined;
     }
     const reviewedPaths = new Set(result.ai.reviewedFiles);
+    const findings = result.findings.filter(finding => finding.source === "ai" && reviewedPaths.has(finding.file));
+    const commentedPaths = new Set(findings.map(finding => finding.file));
     return {
-        files: stagedFiles.filter(file => reviewedPaths.has(file.path)),
-        findings: result.findings.filter(finding => finding.source === "ai" && reviewedPaths.has(finding.file))
+        files: stagedFiles.filter(file => commentedPaths.has(file.path)),
+        findings
     };
 }

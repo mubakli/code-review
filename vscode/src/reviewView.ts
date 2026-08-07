@@ -12,6 +12,7 @@ export const indexContentScheme = "code-review-index";
 export interface OpenDiffTarget {
   file: StagedFile;
   line?: number;
+  findings: ReviewFinding[];
 }
 
 type ReviewNode = ReviewFileNode | ReviewFindingNode;
@@ -29,7 +30,9 @@ export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewNode> {
       values.push(finding);
       findingsByFile.set(finding.file, values);
     }
-    this.files = files.map(file => new ReviewFileNode(file, findingsByFile.get(file.path) ?? []));
+    this.files = files
+      .map(file => new ReviewFileNode(file, findingsByFile.get(file.path) ?? []))
+      .filter(file => file.findings.length > 0);
     this.changedEmitter.fire(undefined);
   }
 
@@ -37,7 +40,7 @@ export class ReviewTreeProvider implements vscode.TreeDataProvider<ReviewNode> {
     const first = this.files.find(file => file.findings.length > 0) ?? this.files[0];
     return first === undefined
       ? undefined
-      : { file: first.file, line: first.findings[0]?.startLine };
+      : { file: first.file, line: first.findings[0]?.startLine, findings: first.findings };
   }
 
   getTreeItem(element: ReviewNode): vscode.TreeItem {
@@ -91,9 +94,11 @@ class ReviewFileNode extends vscode.TreeItem {
     this.command = {
       command: openDiffCommand,
       title: "Open AI Review Diff",
-      arguments: [{ file, line: findings[0]?.startLine } satisfies OpenDiffTarget]
+      arguments: [{ file, line: findings[0]?.startLine, findings } satisfies OpenDiffTarget]
     };
-    this.tooltip = `${file.path}\n${statusLabel(file.status)} staged change`;
+    const tooltip = new vscode.MarkdownString();
+    tooltip.appendMarkdown(`**${file.path}**\n\n${findings.length} AI comment${findings.length === 1 ? "" : "s"}`);
+    this.tooltip = tooltip;
     this.children = findings.map(finding => new ReviewFindingNode(file, finding));
   }
 }
@@ -107,14 +112,21 @@ class ReviewFindingNode extends vscode.TreeItem {
     this.command = {
       command: openDiffCommand,
       title: "Open AI Comment in Diff",
-      arguments: [{ file, line: finding.startLine } satisfies OpenDiffTarget]
+      arguments: [{ file, line: finding.startLine, findings: [finding] } satisfies OpenDiffTarget]
     };
-    this.tooltip = `${finding.message}${finding.suggestion === undefined ? "" : `\n\nSuggestion: ${finding.suggestion}`}`;
+    const tooltip = new vscode.MarkdownString();
+    tooltip.appendMarkdown(`**${finding.severity.toUpperCase()} · ${finding.category}**\n\n`);
+    tooltip.appendText(finding.message);
+    if (finding.suggestion !== undefined) {
+      tooltip.appendMarkdown("\n\n**Suggestion**\n\n");
+      tooltip.appendText(finding.suggestion);
+    }
+    this.tooltip = tooltip;
   }
 }
 
 function statusLabel(status: string): string {
-  switch (status[0]) {
+  switch (status[0]?.toUpperCase()) {
     case "A": return "Added";
     case "C": return "Copied";
     case "D": return "Deleted";

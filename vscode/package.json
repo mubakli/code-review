@@ -70,8 +70,17 @@
         "category": "Code Review"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "code-review",
+          "title": "Code Review",
+          "icon": "media/code-review.svg"
+        }
+      ]
+    },
     "views": {
-      "scm": [
+      "code-review": [
         {
           "id": "code-review.reviewView",
           "name": "AI Review"

@@ -41,6 +41,7 @@ const path = __importStar(require("node:path"));
 const vscode = __importStar(require("vscode"));
 const aiReview_1 = require("./aiReview");
 const autoReview_1 = require("./autoReview");
+const comments_1 = require("./comments");
 const environment_1 = require("./environment");
 const gitApi_1 = require("./gitApi");
 const paths_1 = require("./paths");
@@ -62,6 +63,7 @@ async function activate(context) {
     const reviewTree = new reviewView_1.ReviewTreeProvider();
     const treeView = vscode.window.createTreeView(reviewView_1.reviewViewID, { treeDataProvider: reviewTree });
     const stagedContent = new reviewView_1.StagedContentProvider();
+    const commentPresenter = new comments_1.AICommentPresenter();
     const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     const output = vscode.window.createOutputChannel("Code Review", { log: true });
     const knownRepositories = new Set();
@@ -98,7 +100,7 @@ async function activate(context) {
         clearRepositoryDiagnostics(diagnostics, diagnosticUris, repositoryRoot);
         if (currentSession?.repositoryRoot === repositoryRoot) {
             currentSession = undefined;
-            clearAIView(reviewTree, treeView, stagedContent);
+            clearAIView(reviewTree, treeView, stagedContent, commentPresenter);
         }
         const localResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, undefined, signal);
         await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
@@ -109,8 +111,8 @@ async function activate(context) {
             && provider !== undefined
             && (interactive || configuration.aiAutoReview);
         if (!shouldRunAI) {
-            clearAIView(reviewTree, treeView, stagedContent);
-            setFindingStatus(status, localCount);
+            clearAIView(reviewTree, treeView, stagedContent, commentPresenter);
+            setFindingStatus(status, localCount, "Local");
             return;
         }
         let apiKey = await context.secrets.get(provider.secretKey);
@@ -121,11 +123,11 @@ async function activate(context) {
             ? await approveAIEgress(context.workspaceState, repositoryRoot, provider.id, configuration.model)
             : isAIEgressApproved(context.workspaceState, repositoryRoot, provider.id, configuration.model);
         if (apiKey === undefined || apiKey.trim() === "" || configuration.model === "" || !approved) {
-            clearAIView(reviewTree, treeView, stagedContent);
-            setFindingStatus(status, localCount);
+            clearAIView(reviewTree, treeView, stagedContent, commentPresenter);
+            setFindingStatus(status, localCount, "Local");
             return;
         }
-        setStatus(status, `Code Review: ${localCount} local issue${localCount === 1 ? "" : "s"} · AI reviewing…`);
+        setStatus(status, `Code Review [${provider.label}]: ${localCount} local · AI reviewing…`);
         try {
             const aiResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, apiKey, signal);
             await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
@@ -140,17 +142,17 @@ async function activate(context) {
                 };
                 stagedContent.clear();
                 reviewTree.setReview(aiReview.files, aiReview.findings);
-                treeView.description = `${aiReview.files.length} AI-reviewed files, ${aiReview.findings.length} AI comments`;
-                treeView.message = aiReview.files.length === 0 ? "No files were sent to the AI provider." : undefined;
+                treeView.description = `${provider.label} · ${aiReview.findings.length} AI comments`;
+                treeView.message = aiReview.files.length === 0 ? `${provider.label} completed with no AI comments.` : undefined;
                 const firstTarget = aiReview.findings.length > 0 ? reviewTree.firstTarget() : undefined;
                 if (interactive && firstTarget !== undefined) {
-                    await vscode.commands.executeCommand("workbench.view.scm");
-                    await openStagedDiff(currentSession, firstTarget, stagedContent);
+                    await vscode.commands.executeCommand("workbench.view.extension.code-review");
+                    await openStagedDiff(currentSession, firstTarget, stagedContent, commentPresenter);
                 }
             }
-            setFindingStatus(status, aiResult.findings.length);
+            setFindingStatus(status, aiResult.findings.length, provider.label);
             if (aiResult.ai !== undefined && aiResult.ai.failedBatches > 0) {
-                setStatus(status, `Code Review: ${aiResult.findings.length} issues · AI partial`);
+                setStatus(status, `Code Review [${provider.label}]: ${aiResult.findings.length} issues · partial`);
             }
         }
         catch (error) {
@@ -158,10 +160,12 @@ async function activate(context) {
                 throw error;
             }
             output.error(`AI review failed for ${repositoryRoot}: ${displayError(error)}`);
-            setStatus(status, `Code Review: ${localCount} issues · AI unavailable`);
+            treeView.description = provider.label;
+            treeView.message = `${provider.label} is currently unavailable. Local findings remain in Problems.`;
+            setStatus(status, `Code Review [${provider.label}]: ${localCount} issues · unavailable`);
         }
     }, (_repository, schedulerStatus) => updateSchedulerStatus(status, schedulerStatus, paused), (repository, error) => output.error(`Automatic review failed for ${repository}: ${displayError(error)}`));
-    context.subscriptions.push(diagnostics, output, scheduler, treeView, status, vscode.workspace.registerTextDocumentContentProvider(reviewView_1.baseContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(reviewView_1.indexContentScheme, stagedContent), vscode.commands.registerCommand(configureProviderCommand, async () => {
+    context.subscriptions.push(diagnostics, commentPresenter, output, scheduler, treeView, status, vscode.workspace.registerTextDocumentContentProvider(reviewView_1.baseContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(reviewView_1.indexContentScheme, stagedContent), vscode.commands.registerCommand(configureProviderCommand, async () => {
         const repositoryRoot = await activeRepositoryRoot();
         await configureAIProvider(context, repositoryRoot);
         knownRepositories.add(repositoryRoot);
@@ -190,7 +194,7 @@ async function activate(context) {
         if (target === undefined || currentSession === undefined) {
             return;
         }
-        await openStagedDiff(currentSession, target, stagedContent);
+        await openStagedDiff(currentSession, target, stagedContent, commentPresenter);
     }), vscode.commands.registerCommand(reviewCommand, async () => {
         const repositoryRoot = await activeRepositoryRoot();
         knownRepositories.add(repositoryRoot);
@@ -325,7 +329,7 @@ function reviewerExecutable(configured, repositoryRoot, extensionPath) {
     const developmentBinary = path.join(extensionPath, "..", executableName);
     return (0, node_fs_1.existsSync)(developmentBinary) ? developmentBinary : executableName;
 }
-async function openStagedDiff(session, target, contentProvider) {
+async function openStagedDiff(session, target, contentProvider, commentPresenter) {
     try {
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Window,
@@ -350,6 +354,7 @@ async function openStagedDiff(session, target, contentProvider) {
             const documents = contentProvider.add(target.file.path, base, staged);
             const line = Math.max(0, (target.line ?? 1) - 1);
             await vscode.commands.executeCommand("vscode.diff", documents.base, documents.staged, `${target.file.path} (AI Review: HEAD ↔ Staged)`, { preview: true, selection: new vscode.Range(line, 0, line, 0) });
+            commentPresenter.show(documents.staged, target.findings);
         });
     }
     catch (error) {
@@ -409,8 +414,9 @@ function diagnosticSeverity(severity) {
             return vscode.DiagnosticSeverity.Hint;
     }
 }
-function clearAIView(reviewTree, treeView, stagedContent) {
+function clearAIView(reviewTree, treeView, stagedContent, commentPresenter) {
     stagedContent.clear();
+    commentPresenter.clear();
     reviewTree.setReview([], []);
     treeView.description = "Local rules only";
     treeView.message = "AI-reviewed diffs appear here when optional AI review is configured.";
@@ -454,11 +460,27 @@ async function configureAIProvider(context, repositoryRoot) {
         return;
     }
     const existingKey = await context.secrets.get(provider.secretKey);
-    if (existingKey === undefined || existingKey.trim() === "") {
+    if (existingKey !== undefined && existingKey.trim() !== "") {
+        const keyAction = await vscode.window.showQuickPick([
+            { label: "Use stored API key", description: "Keep the key already stored in SecretStorage" },
+            { label: "Replace API key", description: "Enter and securely store a new key" }
+        ], { title: `Code Review: ${provider.label} Credentials` });
+        if (keyAction === undefined) {
+            return;
+        }
+        if (keyAction.label === "Replace API key" && !await setProviderAPIKey(context.secrets, provider.id)) {
+            return;
+        }
+    }
+    else {
         const stored = await setProviderAPIKey(context.secrets, provider.id);
         if (!stored) {
             return;
         }
+    }
+    const approval = await vscode.window.showWarningMessage(`Enable automatic ${provider.label} review? Eligible staged code will be redacted locally, then sent to model ${model.trim()}.`, { modal: true }, "Enable AI Review");
+    if (approval !== "Enable AI Review") {
+        return;
     }
     await configuration.update("provider", provider.id, vscode.ConfigurationTarget.Workspace);
     await configuration.update("model", model.trim(), vscode.ConfigurationTarget.Workspace);
@@ -528,8 +550,8 @@ function setStatus(status, text) {
     status.text = text;
     status.tooltip = text;
 }
-function setFindingStatus(status, count) {
-    setStatus(status, count === 0 ? "Code Review: $(check) Clean" : `Code Review: ${count} issues`);
+function setFindingStatus(status, count, mode) {
+    setStatus(status, count === 0 ? `Code Review [${mode}]: $(check) Clean` : `Code Review [${mode}]: ${count} issues`);
 }
 function updateSchedulerStatus(status, state, paused) {
     if (paused) {
