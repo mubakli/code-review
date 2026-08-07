@@ -1,0 +1,4 @@
+.DS_Store
+.sentinel/
+coverage.out
+reviewer
