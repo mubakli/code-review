@@ -39,10 +39,12 @@ const node_child_process_1 = require("node:child_process");
 const node_fs_1 = require("node:fs");
 const path = __importStar(require("node:path"));
 const vscode = __importStar(require("vscode"));
+const agents_1 = require("./agents");
 const aiReview_1 = require("./aiReview");
 const autoReview_1 = require("./autoReview");
 const comments_1 = require("./comments");
 const environment_1 = require("./environment");
+const fixController_1 = require("./fixController");
 const gitApi_1 = require("./gitApi");
 const paths_1 = require("./paths");
 const providerView_1 = require("./providerView");
@@ -65,6 +67,7 @@ async function activate(context) {
     const providerTree = new providerView_1.ProviderTreeProvider();
     const providerView = vscode.window.createTreeView(providerView_1.providerViewID, { treeDataProvider: providerTree });
     const stagedContent = new reviewView_1.StagedContentProvider();
+    const fixController = new fixController_1.SuggestedFixController(async (session, token) => (0, protocol_1.parseSnapshotResult)(await runProcess(session.executable, ["snapshot", "--staged", "--repo", session.repositoryRoot], session.repositoryRoot, session.environment, token, 64 * 1024)).reviewId, (session, file, token) => readGitFile(session, `:${file}`, token));
     const commentPresenter = new comments_1.AICommentPresenter();
     const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     const providerStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -83,7 +86,7 @@ async function activate(context) {
     const refreshProviderUI = async () => {
         const folder = vscode.workspace.workspaceFolders?.[0];
         if (folder === undefined) {
-            providerTree.update({ autoReview: false, enabled: false, keyStored: false, model: "" });
+            providerTree.update({ agents: [], autoReview: false, enabled: false, keyStored: false, model: "" });
             providerStatus.text = "$(circle-slash) AI: Off";
             providerStatus.tooltip = "Open a workspace to configure AI review";
             return;
@@ -95,7 +98,9 @@ async function activate(context) {
             ? false
             : (await context.secrets.get(provider.secretKey))?.trim() !== "";
         const model = configuration.get("model", "").trim();
+        const agents = (0, agents_1.configuredReviewAgentIDs)(configuration.get("ai.agents", []));
         providerTree.update({
+            agents,
             autoReview: enabled && configuration.get("ai.autoReview", true),
             enabled,
             keyStored,
@@ -109,7 +114,7 @@ async function activate(context) {
         }
         providerStatus.text = `$(sparkle) AI: ${provider.label} · ${model || provider.defaultModel}`;
         providerStatus.tooltip = keyStored
-            ? `${provider.label} is configured. Click to change provider.`
+            ? `${provider.label} is configured with ${(0, agents_1.reviewAgentSummary)(agents)}. Click to change provider.`
             : `${provider.label} API key is missing. Click to configure.`;
     };
     await refreshProviderUI();
@@ -128,6 +133,7 @@ async function activate(context) {
                 configuration.excludes.join("\0"),
                 configuration.aiEnabled,
                 configuration.aiAutoReview,
+                configuration.agents.join(","),
                 configuration.provider,
                 configuration.model,
                 hasKey
@@ -137,13 +143,20 @@ async function activate(context) {
         const interactive = interactiveRepositories.has(repositoryRoot);
         const configuration = await readConfiguration(context, repositoryRoot);
         clearRepositoryDiagnostics(diagnostics, diagnosticUris, repositoryRoot);
+        fixController.clearRepository(repositoryRoot);
         if (currentSession?.repositoryRoot === repositoryRoot) {
             currentSession = undefined;
             clearAIView(reviewTree, treeView, stagedContent, commentPresenter, repositoryRoot);
         }
         const localResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, undefined, signal);
         await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
-        publishDiagnostics(diagnostics, diagnosticUris, repositoryRoot, localResult);
+        fixController.setReview({
+            environment: (0, environment_1.buildReviewerEnvironment)(process.env),
+            executable: configuration.executable,
+            repositoryRoot,
+            reviewId: snapshot.reviewId
+        }, localResult.findings);
+        publishDiagnostics(diagnostics, diagnosticUris, repositoryRoot, localResult, fixController);
         const localCount = localResult.findings.length;
         const provider = (0, providers_1.providerByID)(configuration.provider);
         const shouldRunAI = configuration.aiEnabled
@@ -170,7 +183,14 @@ async function activate(context) {
         try {
             const aiResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, apiKey, signal);
             await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
-            publishDiagnostics(diagnostics, diagnosticUris, repositoryRoot, aiResult);
+            const fixSession = {
+                environment: (0, environment_1.buildReviewerEnvironment)(process.env),
+                executable: configuration.executable,
+                repositoryRoot,
+                reviewId: snapshot.reviewId
+            };
+            fixController.setReview(fixSession, aiResult.findings);
+            publishDiagnostics(diagnostics, diagnosticUris, repositoryRoot, aiResult, fixController);
             const aiReview = (0, aiReview_1.selectAIReview)(aiResult, reviewedFiles(aiResult));
             if (aiReview !== undefined) {
                 commentPresenter.publishSource(repositoryRoot, aiReview.findings, provider.label);
@@ -206,7 +226,7 @@ async function activate(context) {
             setStatus(status, `Code Review [${provider.label}]: ${localCount} issues · unavailable`);
         }
     }, (_repository, schedulerStatus) => updateSchedulerStatus(status, schedulerStatus, paused), (repository, error) => output.error(`Automatic review failed for ${repository}: ${displayError(error)}`));
-    context.subscriptions.push(diagnostics, commentPresenter, providerView, providerStatus, output, scheduler, treeView, status, vscode.workspace.registerTextDocumentContentProvider(reviewView_1.baseContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(reviewView_1.indexContentScheme, stagedContent), vscode.commands.registerCommand(providerView_1.configureProviderCommand, async () => {
+    context.subscriptions.push(diagnostics, commentPresenter, fixController, providerView, providerStatus, output, scheduler, treeView, status, vscode.workspace.registerTextDocumentContentProvider(reviewView_1.baseContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(reviewView_1.indexContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(fixController_1.fixContentScheme, fixController), vscode.languages.registerCodeActionsProvider({ scheme: "file" }, fixController, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }), vscode.commands.registerCommand(fixController_1.previewSuggestedFixCommand, value => fixController.preview(value)), vscode.commands.registerCommand(fixController_1.applySuggestedFixCommand, value => fixController.apply(value)), vscode.commands.registerCommand(providerView_1.configureProviderCommand, async () => {
         const repositoryRoot = await activeRepositoryRoot();
         await configureAIProvider(context, repositoryRoot);
         await refreshProviderUI();
@@ -216,6 +236,12 @@ async function activate(context) {
         const repositoryRoot = await activeRepositoryRoot();
         await selectAIModel(context, repositoryRoot);
         await refreshProviderUI();
+        scheduler.notify(repositoryRoot, 300);
+    }), vscode.commands.registerCommand(providerView_1.selectAgentsCommand, async () => {
+        const repositoryRoot = await activeRepositoryRoot();
+        await selectAIReviewAgents(repositoryRoot);
+        await refreshProviderUI();
+        knownRepositories.add(repositoryRoot);
         scheduler.notify(repositoryRoot, 300);
     }), vscode.commands.registerCommand(providerView_1.manageAPIKeyCommand, async () => {
         await manageCurrentProviderAPIKey(context);
@@ -294,6 +320,7 @@ async function readConfiguration(context, repositoryRoot) {
     const configuration = vscode.workspace.getConfiguration("codeReview", uri);
     return {
         aiAutoReview: configuration.get("ai.autoReview", true),
+        agents: (0, agents_1.configuredReviewAgentIDs)(configuration.get("ai.agents", [])),
         aiEnabled: configuration.get("ai.enabled", false),
         autoReview: configuration.get("autoReview", true),
         debounceMs: debounce(configuration.get("debounceMs", 500)),
@@ -328,6 +355,9 @@ async function runReviewPhase(repositoryRoot, reviewId, configuration, apiKey, s
     if (apiKey !== undefined && provider !== undefined) {
         environment[provider.environmentVariable] = apiKey;
         args.push("--ai-provider", configuration.provider, "--ai-model", configuration.model);
+        for (const agent of configuration.agents) {
+            args.push("--ai-agent", agent);
+        }
     }
     const result = await withCancellation(signal, async (token) => (0, protocol_1.parseReviewResult)(await runProcess(configuration.executable, args, repositoryRoot, environment, token, maxOutputBytes)));
     if (result.reviewId !== reviewId) {
@@ -420,7 +450,7 @@ async function openStagedDiff(session, target, contentProvider, commentPresenter
 function readGitFile(session, object, token) {
     return runProcess("git", ["-C", session.repositoryRoot, "show", object], session.repositoryRoot, session.environment, token, maxOutputBytes);
 }
-function publishDiagnostics(collection, diagnosticUris, repositoryRoot, result) {
+function publishDiagnostics(collection, diagnosticUris, repositoryRoot, result, fixController) {
     for (const uri of diagnosticUris.get(repositoryRoot)?.values() ?? []) {
         collection.delete(uri);
     }
@@ -433,7 +463,9 @@ function publishDiagnostics(collection, diagnosticUris, repositoryRoot, result) 
         const uri = vscode.Uri.file(filePath);
         const key = uri.toString();
         const entry = grouped.get(key) ?? { uri, values: [] };
-        entry.values.push(toDiagnostic(finding));
+        const diagnostic = toDiagnostic(finding);
+        fixController?.registerDiagnostic(diagnostic, finding);
+        entry.values.push(diagnostic);
         grouped.set(key, entry);
     }
     const current = new Map();
@@ -455,7 +487,7 @@ function toDiagnostic(finding) {
         : `\n\nSuggested action: ${finding.suggestion}`;
     const diagnostic = new vscode.Diagnostic(new vscode.Range(finding.startLine - 1, 0, finding.endLine - 1, Number.MAX_SAFE_INTEGER), `${finding.severity.toUpperCase()} · ${finding.category}\n${finding.title}\n\n${finding.message}${suggestion}`, diagnosticSeverity(finding.severity));
     diagnostic.source = `Code Review: ${finding.source}${finding.agentId === undefined ? "" : `/${finding.agentId}`}`;
-    diagnostic.code = finding.category;
+    diagnostic.code = finding.ruleId;
     return diagnostic;
 }
 function diagnosticSeverity(severity) {
@@ -555,6 +587,28 @@ async function selectAIModel(context, repositoryRoot) {
     }
     await configuration.update("model", model.trim(), vscode.ConfigurationTarget.Workspace);
     await context.workspaceState.update(approvalKey(repositoryRoot), `${provider.id}:${model.trim()}`);
+}
+async function selectAIReviewAgents(repositoryRoot) {
+    const configuration = vscode.workspace.getConfiguration("codeReview", vscode.Uri.file(repositoryRoot));
+    const current = (0, agents_1.configuredReviewAgentIDs)(configuration.get("ai.agents", []));
+    const selected = await vscode.window.showQuickPick(agents_1.reviewAgents.map(agent => ({
+        label: agent.label,
+        description: agent.description,
+        agent,
+        picked: current.includes(agent.id)
+    })), {
+        canPickMany: true,
+        placeHolder: "Choose one or more review agents",
+        title: "Code Review: Select AI Agents"
+    });
+    if (selected === undefined) {
+        return;
+    }
+    if (selected.length === 0) {
+        void vscode.window.showWarningMessage("Select at least one AI review agent.");
+        return;
+    }
+    await configuration.update("ai.agents", selected.map(choice => choice.agent.id), vscode.ConfigurationTarget.Workspace);
 }
 async function manageCurrentProviderAPIKey(context) {
     const folder = vscode.workspace.workspaceFolders?.[0];

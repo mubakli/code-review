@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - name: Test Go
+        run: go test ./...
+      - name: Vet Go
+        run: go vet ./...
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: vscode
+      - name: Check extension
+        run: npm run check
+        working-directory: vscode
+      - name: Test extension
+        run: npm test
+        working-directory: vscode
+      - name: Test extension integration
+        run: xvfb-run -a npm run test:integration
+        working-directory: vscode
+      - name: Package extension
+        run: npm run package:vsix
+        working-directory: vscode

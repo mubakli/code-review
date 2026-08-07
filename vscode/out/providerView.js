@@ -33,15 +33,18 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ProviderTreeProvider = exports.manageAPIKeyCommand = exports.selectModelCommand = exports.configureProviderCommand = exports.providerViewID = void 0;
+exports.ProviderTreeProvider = exports.selectAgentsCommand = exports.manageAPIKeyCommand = exports.selectModelCommand = exports.configureProviderCommand = exports.providerViewID = void 0;
 const vscode = __importStar(require("vscode"));
+const agents_1 = require("./agents");
 exports.providerViewID = "code-review.providerView";
 exports.configureProviderCommand = "code-review.configureAIProvider";
 exports.selectModelCommand = "code-review.selectAIModel";
 exports.manageAPIKeyCommand = "code-review.manageAIKey";
+exports.selectAgentsCommand = "code-review.selectAIAgents";
 class ProviderTreeProvider {
     changedEmitter = new vscode.EventEmitter();
     state = {
+        agents: [],
         autoReview: false,
         enabled: false,
         keyStored: false,
@@ -63,6 +66,7 @@ class ProviderTreeProvider {
         return [
             item(provider.label, "Selected provider", "sparkle", exports.configureProviderCommand, "Change AI Provider"),
             item(this.state.model || provider.defaultModel, "Model", "symbol-method", exports.selectModelCommand, "Change AI Model"),
+            item((0, agents_1.reviewAgentSummary)(this.state.agents), "Review agents", "organization", exports.selectAgentsCommand, "Select AI Review Agents"),
             item(this.state.keyStored ? "API key stored" : "API key required", "SecretStorage", this.state.keyStored ? "key" : "warning", exports.manageAPIKeyCommand, "Manage API Key"),
             item(this.state.autoReview ? "Automatic review on" : "Automatic review off", "After staged changes", this.state.autoReview ? "sync" : "debug-pause", exports.configureProviderCommand, "Configure AI Review")
         ];

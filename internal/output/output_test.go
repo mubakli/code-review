@@ -25,6 +25,20 @@ func TestWriteJSON(t *testing.T) {
 	if decoded.SchemaVersion != review.SchemaVersion || decoded.Summary.FindingCount != 1 || len(decoded.Findings) != 1 {
 		t.Fatalf("decoded result = %#v", decoded)
 	}
+	var document map[string]any
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatalf("decode generic JSON: %v", err)
+	}
+	encodedFindings, _ := document["findings"].([]any)
+	encodedFinding, _ := encodedFindings[0].(map[string]any)
+	for _, required := range []string{"ruleId", "findingId"} {
+		if _, exists := encodedFinding[required]; !exists {
+			t.Errorf("canonical finding JSON omits %q: %s", required, output.String())
+		}
+	}
+	if _, exists := encodedFinding["proposedFix"]; !exists {
+		t.Errorf("canonical finding JSON omits present proposedFix: %s", output.String())
+	}
 }
 
 func TestWriteJSONIncludesOptionalAISummary(t *testing.T) {
@@ -134,6 +148,26 @@ func TestWritersReturnOutputErrors(t *testing.T) {
 }
 
 func sampleResult() review.Result {
+	finding := findings.Finding{
+		RuleID:     "secrets/hardcoded-secret",
+		File:       "config.go",
+		StartLine:  3,
+		EndLine:    3,
+		Severity:   findings.SeverityHigh,
+		Category:   findings.CategorySecurity,
+		Title:      "Potential hardcoded secret",
+		Message:    "A credential may be hardcoded.",
+		Suggestion: "Use a credential store.",
+		ProposedFix: &findings.ProposedFix{
+			Description: "Read the credential from secure storage.",
+			StartLine:   3,
+			EndLine:     3,
+			Replacement: "const apiKey = loadSecret()",
+		},
+		Confidence: 0.98,
+		Source:     findings.SourceLocalRule,
+	}
+	finding.FinalizeID()
 	return review.Result{
 		SchemaVersion: review.SchemaVersion,
 		Summary: review.Summary{
@@ -142,18 +176,7 @@ func sampleResult() review.Result {
 			AddedLines:    1,
 			FindingCount:  1,
 		},
-		Findings: []findings.Finding{{
-			File:       "config.go",
-			StartLine:  3,
-			EndLine:    3,
-			Severity:   findings.SeverityHigh,
-			Category:   findings.CategorySecurity,
-			Title:      "Potential hardcoded secret",
-			Message:    "A credential may be hardcoded.",
-			Suggestion: "Use a credential store.",
-			Confidence: 0.98,
-			Source:     findings.SourceLocalRule,
-		}},
+		Findings: []findings.Finding{finding},
 	}
 }
 

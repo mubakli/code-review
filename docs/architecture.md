@@ -20,33 +20,23 @@ The architecture optimizes for these constraints:
 
 ## Current Structure
 
-```text
-cmd/
-  reviewer/
-    main.go              CLI parsing
-    wire.go              composition root
+The current capability map is intentionally higher-level than a file listing so
+that routine adapter splits do not make this document stale:
 
-internal/
-  change/                shared changed-code model
-  git/                   Git process and staged-diff parser adapter
-  review/                local review use case and Analyzer port
-  analyzers/
-    secrets/             concrete local secret analyzer
-  findings/              shared finding contract and validation
-  ai/                    provider port, safe requests, prompt batching
-    providers/
-      mock/              deterministic orchestration adapter
-      openai/            OpenAI Responses API adapter
-  config/                safe provider and model settings
-  redact/                provider-egress secret redaction
-  pathfilter/             repository-relative path matching
-  output/                 human and JSON presentation
-
-vscode/
-  src/
-    extension.ts          process, settings, SecretStorage, diagnostics
-    protocol.ts           schema-versioned CLI result validation
-```
+- `cmd/reviewer` owns CLI parsing and the concrete composition root.
+- `internal/change`, `internal/git`, and `internal/pathfilter` ingest and scope
+  staged changes without exposing Git details to review logic.
+- `internal/review`, `internal/analyzers/secrets`, and `internal/findings` own
+  deterministic review, finding validation, and merge rules.
+- `internal/ai` owns specialist agents, safe request construction, token
+  budgeting, batching, and provider-neutral orchestration.
+- `internal/ai/providers` contains the mock test adapter, the OpenAI Responses
+  API adapter, and the DeepSeek Chat Completions adapter.
+- `internal/config`, `internal/redact`, and `internal/output` own safe AI
+  settings, provider-egress redaction, and CLI presentation.
+- `vscode/src` is the TypeScript process/UI adapter for provider configuration,
+  `SecretStorage`, staged-review automation, protocol validation, diagnostics,
+  comments, and diff navigation.
 
 Future directories are intentionally not created until a concrete feature
 needs them.
@@ -59,6 +49,7 @@ cmd/reviewer
   -> review
   -> ai
   -> ai/providers/openai
+  -> ai/providers/deepseek
   -> analyzers/secrets
   -> config
   -> pathfilter
@@ -81,7 +72,7 @@ ai
   -> findings
   -> redact
 
-ai/providers/openai
+ai/providers/openai, ai/providers/deepseek
   -> ai
 
 output
@@ -241,16 +232,22 @@ They do not receive repository handles, absolute repository paths, API keys,
 environment-file diffs, or permission to resolve additional files directly.
 
 API keys are runtime secrets, not configuration values. The CLI accepts the
-OpenAI key only through `REVIEWER_OPENAI_API_KEY`. The VS Code adapter reads the
-key from `SecretStorage` and adds it only to an AI-enabled reviewer process.
-The Git adapter removes it before starting Git. Provider and model names may be
-persisted because they are not secret. AI egress also requires explicit
-repository/model approval in the extension.
+OpenAI key only through `REVIEWER_OPENAI_API_KEY` and the DeepSeek key only
+through `REVIEWER_DEEPSEEK_API_KEY`. The VS Code adapter reads the selected
+provider's key from `SecretStorage` and adds it only to an AI-enabled reviewer
+process. The Git adapter removes both variables before starting Git. Provider
+and model names may be persisted because they are not secret. AI egress also
+requires explicit repository/model approval in the extension.
 
 The OpenAI adapter uses the Responses API with `store: false`, strict JSON
 schema output, context-aware HTTP requests, HTTPS-only remote endpoints, and a
 bounded response body. SDK-specific request and response types remain inside
 the provider package.
+
+The DeepSeek adapter uses the Chat Completions API with JSON output and the same
+context cancellation, HTTPS-only endpoint, response-size, and finding
+validation boundaries. DeepSeek-specific wire types remain inside its provider
+package.
 
 ## AI Orchestration
 
@@ -289,9 +286,15 @@ all agents then pass through the existing deterministic-primary deduplication.
 ## Wire Contracts
 
 `review.Result` currently doubles as the CLI JSON response. This is deliberate
-while the application is small. The VS Code adapter accepts schema version 1
-and validates every summary and finding before publishing diagnostics. Future
-wire changes must use schema-versioned migrations and matching adapter tests.
+while the application is small. Schema version 3 is the current contract for
+both review and staged-snapshot envelopes. Version 3 findings carry a required
+namespaced `ruleId`, a deterministic SHA-256 `findingId`, and an optional
+bounded whole-line `proposedFix` whose range must match the finding. Reviewed-file
+metadata, AI agent identities, and routed-agent summaries remain part of the
+contract. The VS Code adapter accepts version 3 and validates every envelope,
+file, summary, finding identity, and proposed fix before publishing diagnostics,
+comments, or edits. Future wire changes must use a new schema version and
+matching CLI and adapter tests.
 
 A separate protocol DTO should be introduced only when editor and CLI wire
 needs actually diverge from application values.

@@ -39,3 +39,25 @@ func TestRouteAgentsIgnoresDeletedSecurityTerms(t *testing.T) {
 		t.Fatalf("agents = %#v", agents)
 	}
 }
+
+func TestSelectAgentsUsesRequestedOrder(t *testing.T) {
+	t.Parallel()
+
+	agents, err := ai.SelectAgents([]string{"security", "correctness"})
+	if err != nil {
+		t.Fatalf("SelectAgents() error = %v", err)
+	}
+	if len(agents) != 2 || agents[0].ID != ai.AgentSecurity || agents[1].ID != ai.AgentCorrectness {
+		t.Fatalf("SelectAgents() = %#v", agents)
+	}
+}
+
+func TestSelectAgentsRejectsInvalidSelections(t *testing.T) {
+	t.Parallel()
+
+	for _, ids := range [][]string{nil, {"performance"}, {"security", "security"}} {
+		if _, err := ai.SelectAgents(ids); err == nil {
+			t.Fatalf("SelectAgents(%v) error = nil", ids)
+		}
+	}
+}

@@ -7,7 +7,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 const execFileAsync = promisify(execFile);
-const extensionID = "local.code-review";
+const extensionID = "mubakli.code-review";
 const diagnosticSource = "Code Review: local-rule";
 
 suite("Code Review extension", () => {
@@ -21,7 +21,10 @@ suite("Code Review extension", () => {
     for (const command of [
       "code-review.configureAIProvider",
       "code-review.selectAIModel",
-      "code-review.manageAIKey"
+      "code-review.selectAIAgents",
+      "code-review.manageAIKey",
+      "code-review.previewSuggestedFix",
+      "code-review.applySuggestedFix"
     ]) {
       assert.ok(commands.includes(command), `command ${command} is missing`);
     }
@@ -30,6 +33,7 @@ suite("Code Review extension", () => {
     await configuration.update("binaryPath", "", vscode.ConfigurationTarget.Global);
     await configuration.update("provider", "none", vscode.ConfigurationTarget.Workspace);
     await configuration.update("model", "", vscode.ConfigurationTarget.Workspace);
+    await configuration.update("ai.agents", ["correctness", "security"], vscode.ConfigurationTarget.Workspace);
     await configuration.update("autoReview", true, vscode.ConfigurationTarget.Workspace);
     await configuration.update("debounceMs", 300, vscode.ConfigurationTarget.Workspace);
 

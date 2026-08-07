@@ -199,7 +199,8 @@ func changedFile(path string, additions []string) change.FileChange {
 }
 
 func validFinding(file, title, message string) findings.Finding {
-	return findings.Finding{
+	finding := findings.Finding{
+		RuleID:     "test/static-rule",
 		File:       file,
 		StartLine:  1,
 		EndLine:    1,
@@ -210,4 +211,6 @@ func validFinding(file, title, message string) findings.Finding {
 		Confidence: 0.9,
 		Source:     findings.SourceLocalRule,
 	}
+	finding.FinalizeID()
+	return finding
 }

@@ -33,6 +33,14 @@ func TestProviderUsesStructuredChatCompletionWithoutLeakingSecret(t *testing.T) 
 		if format["type"] != "json_object" || payload["stream"] != false {
 			t.Fatalf("request settings = %#v", payload)
 		}
+		messages, _ := payload["messages"].([]any)
+		system, _ := messages[0].(map[string]any)
+		instructions, _ := system["content"].(string)
+		for _, expected := range []string{"proposedFix", "exactly equal", "added diff line", "Do not return ruleId or findingId"} {
+			if !strings.Contains(instructions, expected) {
+				t.Errorf("structured instructions do not contain %q: %s", expected, instructions)
+			}
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"choices": []any{map[string]any{

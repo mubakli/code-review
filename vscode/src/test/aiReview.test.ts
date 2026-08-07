@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { selectAIReview } from "../aiReview";
-import { ReviewResult } from "../protocol";
+import { ReviewFinding, ReviewResult } from "../protocol";
 
 const summary = {
   filesChanged: 2,
@@ -16,7 +16,7 @@ const summary = {
 
 test("selectAIReview disables diff UI for local-only results", () => {
   const result: ReviewResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     reviewId: `sha256:${"a".repeat(64)}`,
     summary: { ...summary, findingCount: 0 },
     files: [],
@@ -27,7 +27,7 @@ test("selectAIReview disables diff UI for local-only results", () => {
 
 test("selectAIReview uses provider-reviewed paths and AI findings only", () => {
   const result: ReviewResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     reviewId: `sha256:${"a".repeat(64)}`,
     summary,
     files: [{ path: "main.go", status: "modified" }, { path: ".env", status: "modified" }],
@@ -56,7 +56,7 @@ test("selectAIReview uses provider-reviewed paths and AI findings only", () => {
 
 test("selectAIReview does not list provider-reviewed files without comments", () => {
   const result: ReviewResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     reviewId: `sha256:${"c".repeat(64)}`,
     summary: { ...summary, findingCount: 0 },
     files: [{ path: "main.go", status: "modified" }],
@@ -74,8 +74,10 @@ test("selectAIReview does not list provider-reviewed files without comments", ()
   assert.deepEqual(selectAIReview(result, [{ path: "main.go", status: "M" }])?.files, []);
 });
 
-function finding(file: string, source: string) {
+function finding(file: string, source: ReviewFinding["source"]): ReviewFinding {
   return {
+    ruleId: source === "ai" ? "ai/correctness" : "secrets/hardcoded-secret",
+    findingId: `sha256:${(source === "ai" ? "d" : "e").repeat(64)}`,
     file,
     startLine: 1,
     endLine: 1,

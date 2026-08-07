@@ -9,11 +9,11 @@ import (
 // of the same issue. Primary findings keep their deterministic explanation and
 // source, while severity and confidence may be raised by a duplicate.
 func Merge(primary, secondary []Finding) []Finding {
-	merged := append([]Finding(nil), primary...)
+	merged := Clone(primary)
 	for _, candidate := range secondary {
 		duplicate := duplicateIndex(merged, candidate)
 		if duplicate < 0 {
-			merged = append(merged, candidate)
+			merged = append(merged, candidate.Clone())
 			continue
 		}
 		consolidate(&merged[duplicate], candidate)
@@ -81,6 +81,10 @@ func consolidate(target *Finding, duplicate Finding) {
 	}
 	if target.Suggestion == "" && duplicate.Suggestion != "" {
 		target.Suggestion = duplicate.Suggestion
+	}
+	if target.ProposedFix == nil && duplicate.ProposedFix != nil {
+		fix := *duplicate.ProposedFix
+		target.ProposedFix = &fix
 	}
 }
 

@@ -7,7 +7,7 @@ const strict_1 = __importDefault(require("node:assert/strict"));
 const node_test_1 = __importDefault(require("node:test"));
 const protocol_1 = require("../protocol");
 const validResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     reviewId: `sha256:${"a".repeat(64)}`,
     summary: {
         filesChanged: 1,
@@ -20,6 +20,8 @@ const validResult = {
     },
     files: [{ path: "main.go", status: "modified" }],
     findings: [{
+            ruleId: "secrets/hardcoded-secret",
+            findingId: `sha256:${"c".repeat(64)}`,
             file: "main.go",
             startLine: 3,
             endLine: 3,
@@ -34,7 +36,7 @@ const validResult = {
 };
 (0, node_test_1.default)("parseReviewResult accepts the CLI schema", () => {
     const result = (0, protocol_1.parseReviewResult)(JSON.stringify(validResult));
-    strict_1.default.equal(result.schemaVersion, 2);
+    strict_1.default.equal(result.schemaVersion, 3);
     strict_1.default.equal(result.findings[0].file, "main.go");
 });
 (0, node_test_1.default)("parseReviewResult rejects unsupported schemas", () => {
@@ -67,9 +69,36 @@ const validResult = {
     strict_1.default.deepEqual(result.ai?.reviewedFiles, ["main.go"]);
     strict_1.default.deepEqual(result.ai?.agents, ["correctness"]);
 });
+(0, node_test_1.default)("parseReviewResult validates structured proposed fixes", () => {
+    const proposedFix = {
+        description: "Use the returned error.",
+        startLine: 3,
+        endLine: 3,
+        replacement: "if err != nil { return err }"
+    };
+    const result = (0, protocol_1.parseReviewResult)(JSON.stringify({
+        ...validResult,
+        findings: [{ ...validResult.findings[0], proposedFix }]
+    }));
+    strict_1.default.deepEqual(result.findings[0].proposedFix, proposedFix);
+    strict_1.default.throws(() => (0, protocol_1.parseReviewResult)(JSON.stringify({
+        ...validResult,
+        findings: [{ ...validResult.findings[0], proposedFix: { ...proposedFix, startLine: 2 } }]
+    })), /range must match/);
+});
+(0, node_test_1.default)("parseReviewResult requires stable rule and finding IDs", () => {
+    strict_1.default.throws(() => (0, protocol_1.parseReviewResult)(JSON.stringify({
+        ...validResult,
+        findings: [{ ...validResult.findings[0], ruleId: "Security Rule" }]
+    })), /safe lowercase namespace/);
+    strict_1.default.throws(() => (0, protocol_1.parseReviewResult)(JSON.stringify({
+        ...validResult,
+        findings: [{ ...validResult.findings[0], findingId: "unstable" }]
+    })), /SHA-256 identifier/);
+});
 (0, node_test_1.default)("parseSnapshotResult validates deterministic review IDs", () => {
     const snapshot = (0, protocol_1.parseSnapshotResult)(JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         reviewId: `sha256:${"b".repeat(64)}`,
         filesChanged: 3
     }));

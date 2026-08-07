@@ -212,7 +212,7 @@ func responseSchema() map[string]any {
 					"additionalProperties": false,
 					"required": []string{
 						"file", "startLine", "endLine", "severity", "category",
-						"title", "message", "suggestion", "confidence",
+						"title", "message", "suggestion", "proposedFix", "confidence",
 					},
 					"properties": map[string]any{
 						"file":       map[string]any{"type": "string"},
@@ -223,6 +223,22 @@ func responseSchema() map[string]any {
 						"title":      map[string]any{"type": "string"},
 						"message":    map[string]any{"type": "string"},
 						"suggestion": map[string]any{"type": "string"},
+						"proposedFix": map[string]any{
+							"anyOf": []any{
+								map[string]any{
+									"type":                 "object",
+									"additionalProperties": false,
+									"required":             []string{"description", "startLine", "endLine", "replacement"},
+									"properties": map[string]any{
+										"description": map[string]any{"type": "string", "minLength": 1, "maxLength": findings.MaxFixDescriptionBytes},
+										"startLine":   map[string]any{"type": "integer", "minimum": 1},
+										"endLine":     map[string]any{"type": "integer", "minimum": 1},
+										"replacement": map[string]any{"type": "string", "maxLength": findings.MaxFixReplacementBytes},
+									},
+								},
+								map[string]any{"type": "null"},
+							},
+						},
 						"confidence": map[string]any{"type": "number", "minimum": 0, "maximum": 1},
 					},
 				},

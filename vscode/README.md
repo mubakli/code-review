@@ -28,11 +28,13 @@ keys remain separate. Choosing **Local review only** disables external requests.
 The selected provider is always visible in two places:
 
 - Status Bar: `AI: DeepSeek · deepseek-chat` or `AI: Off`.
-- Code Review Activity Bar → **AI Provider**: provider, model, key status, and
-  automatic-review status.
+- Code Review Activity Bar → **AI Provider**: provider, model, active agents,
+  key status, and automatic-review status.
 
 Click the provider status item or provider row to switch provider. Use the model
 and API-key rows for direct changes without repeating the full setup flow.
+Click the agents row or run **Code Review: Select AI Review Agents** to switch
+between Correctness, Security, or both without changing provider or model.
 
 After AI review, the dedicated **Code Review** Activity Bar view lists only
 files that contain actual AI comments; it is separate from Source Control's full
@@ -47,9 +49,17 @@ working-tree source lines. Opening a reviewed file therefore shows the warning
 in the editor gutter and the readable provider/agent comment beside the code;
 the user does not need to navigate through the full Git diff first.
 
-AI findings identify the specialist that produced them. Correctness review runs
-for every eligible staged change; security review is selectively added when the
+AI findings identify the specialist that produced them. When selected,
+Correctness runs for every eligible staged change; Security runs only when the
 change contains security-relevant signals.
+
+Findings use stable namespaced rule IDs and deterministic finding IDs. When an
+AI agent can produce an exact structured replacement, **Preview Suggested Fix**
+is available from the finding's lightbulb or Review Comments context menu. The
+preview compares the exact reviewed staged blob with the proposed result. Apply
+is always explicit and is refused if the staged snapshot changed, the path is
+unsafe, or the working-tree file differs from staged content. A successful apply
+creates an undoable unsaved editor change; it never saves or stages the file.
 
 Use `codeReview.exclude` for additional repository-relative exclusion patterns.
 Automatic review is controlled by `codeReview.autoReview` and
@@ -68,4 +78,4 @@ npm run package:vsix
 
 The Extension Host test builds the real Go CLI, creates a temporary Git
 repository, and verifies staged diff navigation plus Problems diagnostics.
-Packaging writes `code-review-0.1.0.vsix` in this directory.
+Packaging writes the versioned `code-review-*.vsix` artifact in this directory.

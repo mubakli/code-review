@@ -17,6 +17,7 @@ var (
 )
 
 type secretMatch struct {
+	ruleID     string
 	severity   findings.Severity
 	title      string
 	message    string
@@ -50,6 +51,7 @@ func (Analyzer) Analyze(ctx context.Context, changes change.ChangeSet) ([]findin
 					continue
 				}
 				result = append(result, findings.Finding{
+					RuleID:     match.ruleID,
 					File:       file.Path(),
 					StartLine:  line.NewLine,
 					EndLine:    line.NewLine,
@@ -70,6 +72,7 @@ func (Analyzer) Analyze(ctx context.Context, changes change.ChangeSet) ([]findin
 func detectSecret(line string) (secretMatch, bool) {
 	if privateKeyPattern.MatchString(line) {
 		return secretMatch{
+			ruleID:     "secrets/private-key",
 			severity:   findings.SeverityCritical,
 			title:      "Private key added to source control",
 			message:    "An added line contains a private key header.",
@@ -78,6 +81,7 @@ func detectSecret(line string) (secretMatch, bool) {
 	}
 	if token := knownTokenPattern.FindString(line); token != "" && !isPlaceholder(token) {
 		return secretMatch{
+			ruleID:     "secrets/provider-credential",
 			severity:   findings.SeverityHigh,
 			title:      "Potential provider credential",
 			message:    "An added line contains a value matching a known credential format.",
@@ -90,6 +94,7 @@ func detectSecret(line string) (secretMatch, bool) {
 	}
 	if len(matches) == 4 && isLiteralSecret(matches[3]) {
 		return secretMatch{
+			ruleID:     "secrets/hardcoded-secret",
 			severity:   findings.SeverityMedium,
 			title:      "Potential hardcoded secret",
 			message:    "An added credential-like assignment appears to contain a literal value.",

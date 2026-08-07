@@ -14,13 +14,14 @@ type AnalysisResponse struct {
 }
 
 type ResponseFinding struct {
-	File       string            `json:"file"`
-	StartLine  int               `json:"startLine"`
-	EndLine    int               `json:"endLine"`
-	Severity   findings.Severity `json:"severity"`
-	Category   findings.Category `json:"category"`
-	Title      string            `json:"title"`
-	Message    string            `json:"message"`
-	Suggestion string            `json:"suggestion,omitempty"`
-	Confidence float64           `json:"confidence"`
+	File        string                `json:"file"`
+	StartLine   int                   `json:"startLine"`
+	EndLine     int                   `json:"endLine"`
+	Severity    findings.Severity     `json:"severity"`
+	Category    findings.Category     `json:"category"`
+	Title       string                `json:"title"`
+	Message     string                `json:"message"`
+	Suggestion  string                `json:"suggestion"`
+	ProposedFix *findings.ProposedFix `json:"proposedFix"`
+	Confidence  float64               `json:"confidence"`
 }

@@ -81,6 +81,9 @@ func TestRunReviewJSON(t *testing.T) {
 	if result.Summary.FilesReviewed != 1 || result.Summary.FindingCount != 1 {
 		t.Fatalf("result summary = %#v", result.Summary)
 	}
+	if result.SchemaVersion != 3 {
+		t.Fatalf("SchemaVersion = %d, want 3", result.SchemaVersion)
+	}
 	if !strings.HasPrefix(result.ReviewID, "sha256:") || len(result.Files) != 1 || result.Files[0].Path != "config.go" {
 		t.Fatalf("review identity/files = %q, %#v", result.ReviewID, result.Files)
 	}
@@ -89,6 +92,9 @@ func TestRunReviewJSON(t *testing.T) {
 	}
 	if result.Findings[0].File != "config.go" || result.Findings[0].StartLine != 3 {
 		t.Errorf("finding = %#v", result.Findings[0])
+	}
+	if result.Findings[0].RuleID != "secrets/hardcoded-secret" || !strings.HasPrefix(result.Findings[0].FindingID, "sha256:") || result.Findings[0].ProposedFix != nil {
+		t.Errorf("finding identity/fix = %#v", result.Findings[0])
 	}
 }
 
@@ -316,6 +322,7 @@ func TestReviewStagedRunsConfiguredAIProvider(t *testing.T) {
 			Provider:        config.AIProviderOpenAI,
 			Model:           "review-model",
 			MaxOutputTokens: 1000,
+			Agents:          []string{"correctness", "security"},
 		},
 		Provider: provider,
 	})
@@ -325,7 +332,7 @@ func TestReviewStagedRunsConfiguredAIProvider(t *testing.T) {
 	if result.AI == nil || result.AI.SuccessfulBatches != 1 || result.AI.FailedBatches != 0 || len(result.AI.Agents) != 1 || result.AI.Agents[0] != string(ai.AgentCorrectness) {
 		t.Fatalf("AI summary = %#v", result.AI)
 	}
-	if len(result.Findings) != 1 || result.Findings[0].Source != findings.SourceAI || result.Findings[0].AgentID != string(ai.AgentCorrectness) {
+	if len(result.Findings) != 1 || result.Findings[0].Source != findings.SourceAI || result.Findings[0].AgentID != string(ai.AgentCorrectness) || result.Findings[0].RuleID != "ai/correctness" || !strings.HasPrefix(result.Findings[0].FindingID, "sha256:") {
 		t.Fatalf("findings = %#v", result.Findings)
 	}
 }
@@ -359,6 +366,7 @@ func TestReviewStagedNeverSendsEnvironmentFilesToAI(t *testing.T) {
 			Provider:        config.AIProviderOpenAI,
 			Model:           "review-model",
 			MaxOutputTokens: 1000,
+			Agents:          []string{"correctness", "security"},
 		},
 		Provider: provider,
 	})

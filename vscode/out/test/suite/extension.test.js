@@ -43,7 +43,7 @@ const promises_1 = require("node:fs/promises");
 const path = __importStar(require("node:path"));
 const vscode = __importStar(require("vscode"));
 const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
-const extensionID = "local.code-review";
+const extensionID = "mubakli.code-review";
 const diagnosticSource = "Code Review: local-rule";
 suite("Code Review extension", () => {
     test("automatically reviews external staged snapshot changes", async () => {
@@ -56,7 +56,10 @@ suite("Code Review extension", () => {
         for (const command of [
             "code-review.configureAIProvider",
             "code-review.selectAIModel",
-            "code-review.manageAIKey"
+            "code-review.selectAIAgents",
+            "code-review.manageAIKey",
+            "code-review.previewSuggestedFix",
+            "code-review.applySuggestedFix"
         ]) {
             strict_1.default.ok(commands.includes(command), `command ${command} is missing`);
         }
@@ -64,6 +67,7 @@ suite("Code Review extension", () => {
         await configuration.update("binaryPath", "", vscode.ConfigurationTarget.Global);
         await configuration.update("provider", "none", vscode.ConfigurationTarget.Workspace);
         await configuration.update("model", "", vscode.ConfigurationTarget.Workspace);
+        await configuration.update("ai.agents", ["correctness", "security"], vscode.ConfigurationTarget.Workspace);
         await configuration.update("autoReview", true, vscode.ConfigurationTarget.Workspace);
         await configuration.update("debounceMs", 300, vscode.ConfigurationTarget.Workspace);
         const sourceURI = vscode.Uri.file(path.join(folder.uri.fsPath, "main.go"));

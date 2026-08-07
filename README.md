@@ -53,12 +53,19 @@ budgeted AnalysisRequest values
 This diff-only fallback works for every text-based codebase. The CLI invokes a
 provider only when AI review is explicitly enabled.
 
-AI review uses selective specialist agents rather than one unrestricted prompt.
-The correctness agent runs for every eligible staged change. The security agent
-is added only when changed paths or added lines contain deterministic security
-signals. Each agent receives the same redacted, budgeted diff pipeline; Go
+AI review uses selectable specialist agents rather than one unrestricted prompt.
+When enabled, the correctness agent runs for every eligible staged change. The
+security agent runs only when changed paths or added lines contain deterministic
+security signals. Each agent receives the same redacted, budgeted diff pipeline; Go
 assigns the trusted `agentId`, filters out-of-scope categories, and merges likely
 duplicates before returning findings.
+
+Every finding carries a stable namespaced `ruleId` and a deterministic
+`findingId`. AI findings may also contain a bounded structured `proposedFix`
+only when the agent can replace the complete added-line range exactly. The VS
+Code adapter previews the reviewed staged blob against that proposal and applies
+it only after explicit confirmation and stale/content/path validation. Apply
+creates an unsaved working-tree edit and never saves or stages automatically.
 
 ## Usage
 
@@ -72,10 +79,16 @@ go build -o reviewer ./cmd/reviewer
 
 export REVIEWER_OPENAI_API_KEY='your-key'
 ./reviewer review --staged --ai-provider openai --ai-model your-model
+./reviewer review --staged --ai-provider openai --ai-model your-model --ai-agent correctness
 
 export REVIEWER_DEEPSEEK_API_KEY='your-key'
 ./reviewer review --staged --ai-provider deepseek --ai-model deepseek-chat
+./reviewer review --staged --ai-provider deepseek --ai-model deepseek-chat --ai-agent security
 ```
+
+Repeat `--ai-agent` to combine specialists. If omitted, Correctness and Security
+are enabled; Security is still invoked only when the staged change contains a
+security-relevant signal.
 
 The command returns a non-zero exit code for usage, Git, parsing, or analysis
 errors. Findings do not block a commit in this milestone.

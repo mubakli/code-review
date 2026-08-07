@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.reviewSchemaVersion = void 0;
 exports.parseReviewResult = parseReviewResult;
 exports.parseSnapshotResult = parseSnapshotResult;
-exports.reviewSchemaVersion = 2;
+exports.reviewSchemaVersion = 3;
 const severities = new Set(["critical", "high", "medium", "low", "info"]);
 const categories = new Set(["security", "correctness", "performance", "database", "maintainability", "quality"]);
 const sources = new Set(["local-rule", "static-analysis", "sql-analyzer", "ai"]);
@@ -34,6 +34,9 @@ function parseReviewResult(output) {
         throw new Error("findings must be an array");
     }
     const findings = root.findings.map(parseFinding);
+    if (new Set(findings.map(finding => finding.findingId)).size !== findings.length) {
+        throw new Error("findingId values must be unique");
+    }
     if (summary.findingCount !== findings.length) {
         throw new Error("summary.findingCount does not match findings length");
     }
@@ -107,7 +110,9 @@ function parseFinding(value, index) {
         throw new Error(`${prefix}.source is unsupported`);
     }
     return {
-        file: singleLineText(finding.file, `${prefix}.file`),
+        ruleId: ruleID(finding.ruleId, `${prefix}.ruleId`),
+        findingId: findingID(finding.findingId, `${prefix}.findingId`),
+        file: relativePath(finding.file, `${prefix}.file`),
         startLine,
         endLine,
         severity,
@@ -115,10 +120,31 @@ function parseFinding(value, index) {
         title: text(finding.title, `${prefix}.title`),
         message: text(finding.message, `${prefix}.message`),
         suggestion: optionalText(finding.suggestion, `${prefix}.suggestion`),
+        proposedFix: finding.proposedFix === undefined ? undefined : parseProposedFix(finding.proposedFix, prefix, startLine, endLine),
         confidence,
         source,
         agentId: finding.agentId === undefined ? undefined : singleLineText(finding.agentId, `${prefix}.agentId`)
     };
+}
+function parseProposedFix(value, prefix, findingStart, findingEnd) {
+    const fix = record(value, `${prefix}.proposedFix`);
+    const startLine = positiveInteger(fix.startLine, `${prefix}.proposedFix.startLine`);
+    const endLine = positiveInteger(fix.endLine, `${prefix}.proposedFix.endLine`);
+    if (startLine !== findingStart || endLine !== findingEnd) {
+        throw new Error(`${prefix}.proposedFix range must match the finding range`);
+    }
+    const description = text(fix.description, `${prefix}.proposedFix.description`);
+    const replacement = string(fix.replacement, `${prefix}.proposedFix.replacement`);
+    if (byteLength(description) > 1000) {
+        throw new Error(`${prefix}.proposedFix.description is too large`);
+    }
+    if (byteLength(replacement) > 64 * 1024) {
+        throw new Error(`${prefix}.proposedFix.replacement is too large`);
+    }
+    if (containsUnsafeFixMarker(description) || containsUnsafeFixMarker(replacement)) {
+        throw new Error(`${prefix}.proposedFix contains a redaction or truncation marker`);
+    }
+    return { description, startLine, endLine, replacement };
 }
 function parseAI(value) {
     const ai = record(value, "ai");
@@ -147,6 +173,12 @@ function record(value, name) {
 function text(value, name) {
     if (typeof value !== "string" || value.trim() === "") {
         throw new Error(`${name} must be a non-empty string`);
+    }
+    return value;
+}
+function string(value, name) {
+    if (typeof value !== "string" || value.includes("\0")) {
+        throw new Error(`${name} must be NUL-free text`);
     }
     return value;
 }
@@ -181,6 +213,35 @@ function reviewID(value) {
         throw new Error("reviewId must be a SHA-256 identifier");
     }
     return result;
+}
+function findingID(value, name) {
+    const result = singleLineText(value, name);
+    if (!/^sha256:[0-9a-f]{64}$/.test(result)) {
+        throw new Error(`${name} must be a SHA-256 identifier`);
+    }
+    return result;
+}
+function ruleID(value, name) {
+    const result = singleLineText(value, name);
+    if (new TextEncoder().encode(result).length > 128 || !/^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)+$/.test(result)) {
+        throw new Error(`${name} must be a safe lowercase namespace`);
+    }
+    return result;
+}
+function relativePath(value, name) {
+    const result = singleLineText(value, name);
+    if (result.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(result) || result.split(/[\\/]/).includes("..")) {
+        throw new Error(`${name} must be repository-relative`);
+    }
+    return result;
+}
+function byteLength(value) {
+    return new TextEncoder().encode(value).length;
+}
+function containsUnsafeFixMarker(value) {
+    const lower = value.toLowerCase();
+    return ["[redacted", "<redacted", "[truncated", "<truncated", "[reviewer: partial hunk", "[reviewer: long diff line truncated"]
+        .some(marker => lower.includes(marker));
 }
 function integer(value, name) {
     const result = finiteNumber(value, name);

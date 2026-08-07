@@ -72,6 +72,7 @@ func TestReviewChangesRejectsFindingOutsideReviewedFiles(t *testing.T) {
 	t.Parallel()
 
 	finding := findings.Finding{
+		RuleID:     "static/out-of-scope",
 		File:       "../other.go",
 		StartLine:  1,
 		EndLine:    1,
@@ -91,6 +92,41 @@ func TestReviewChangesRejectsFindingOutsideReviewedFiles(t *testing.T) {
 	_, err := service.ReviewChanges(context.Background(), changes)
 	if err == nil || !strings.Contains(err.Error(), "outside the reviewed changes") {
 		t.Fatalf("ReviewChanges() error = %v", err)
+	}
+}
+
+func TestReviewChangesFinalizesFindingIDBeforeValidation(t *testing.T) {
+	t.Parallel()
+
+	finding := findings.Finding{
+		RuleID:      "static/test-rule",
+		FindingID:   "provider-controlled-value",
+		File:        "main.go",
+		StartLine:   1,
+		EndLine:     1,
+		Severity:    findings.SeverityLow,
+		Category:    findings.CategoryQuality,
+		Title:       "Test finding",
+		Message:     "A test finding.",
+		ProposedFix: &findings.ProposedFix{Description: "Replace the line.", StartLine: 1, EndLine: 1, Replacement: "replacement"},
+		Confidence:  0.8,
+		Source:      findings.SourceStaticAnalysis,
+	}
+	service := New(pathfilter.New(nil), staticAnalyzer{findings: []findings.Finding{finding}})
+	changes := change.ChangeSet{Files: []change.FileChange{{NewPath: "main.go", Status: change.StatusAdded}}}
+	result, err := service.ReviewChanges(context.Background(), changes)
+	if err != nil {
+		t.Fatalf("ReviewChanges() error = %v", err)
+	}
+	if len(result.Findings) != 1 || !strings.HasPrefix(result.Findings[0].FindingID, "sha256:") || result.Findings[0].FindingID == finding.FindingID {
+		t.Fatalf("finding was not finalized: %#v", result.Findings)
+	}
+	if result.SchemaVersion != 3 {
+		t.Fatalf("SchemaVersion = %d, want 3", result.SchemaVersion)
+	}
+	result.Findings[0].ProposedFix.Replacement = "mutated"
+	if finding.ProposedFix.Replacement == "mutated" {
+		t.Fatal("review result aliases analyzer proposed fix")
 	}
 }
 

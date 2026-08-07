@@ -118,10 +118,12 @@ class ReviewFileNode extends vscode.TreeItem {
     }
 }
 class ReviewFindingNode extends vscode.TreeItem {
+    finding;
     constructor(file, finding) {
         super(finding.title, vscode.TreeItemCollapsibleState.None);
-        this.description = `line ${finding.startLine} - ${finding.severity}${finding.agentId === undefined ? "" : ` - ${finding.agentId}`}`;
-        this.contextValue = "reviewFinding";
+        this.finding = finding;
+        this.description = `line ${finding.startLine} - ${finding.severity}${finding.agentId === undefined ? "" : ` - ${finding.agentId}`}${finding.proposedFix === undefined ? "" : " - fix available"}`;
+        this.contextValue = finding.proposedFix === undefined ? "reviewFinding" : "reviewFindingFix";
         this.iconPath = new vscode.ThemeIcon(severityIcon(finding.severity));
         this.command = {
             command: exports.openDiffCommand,
@@ -134,6 +136,10 @@ class ReviewFindingNode extends vscode.TreeItem {
         if (finding.suggestion !== undefined) {
             tooltip.appendMarkdown("\n\n**Suggestion**\n\n");
             tooltip.appendText(finding.suggestion);
+        }
+        if (finding.proposedFix !== undefined) {
+            tooltip.appendMarkdown("\n\n**Proposed fix**\n\n");
+            tooltip.appendText(finding.proposedFix.description);
         }
         this.tooltip = tooltip;
     }

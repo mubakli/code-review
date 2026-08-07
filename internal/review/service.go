@@ -10,7 +10,7 @@ import (
 	"code-review/internal/pathfilter"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Summary struct {
 	FilesChanged  int `json:"filesChanged"`
@@ -184,15 +184,17 @@ func (s *Service) ReviewScope(ctx context.Context, scope Scope) (Result, error) 
 		if err != nil {
 			return Result{}, fmt.Errorf("run %s analyzer: %w", name, err)
 		}
-		for index, finding := range values {
+		for index := range values {
+			finding := values[index].Clone()
+			finding.FinalizeID()
 			if err := finding.Validate(); err != nil {
 				return Result{}, fmt.Errorf("run %s analyzer: finding %d is invalid: %w", name, index+1, err)
 			}
 			if _, exists := scope.reviewedPaths[finding.File]; !exists {
 				return Result{}, fmt.Errorf("run %s analyzer: finding %d references a file outside the reviewed changes", name, index+1)
 			}
+			result.Findings = append(result.Findings, finding)
 		}
-		result.Findings = append(result.Findings, values...)
 	}
 
 	findings.Sort(result.Findings)

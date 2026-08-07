@@ -50,11 +50,13 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 	repository := flags.String("repo", workDirectory, "path inside the Git repository")
 	aiProvider := flags.String("ai-provider", string(config.AIProviderNone), "AI provider: none, openai, or deepseek")
 	aiModel := flags.String("ai-model", "", "AI model name (required when AI is enabled)")
+	var aiAgents valueListFlag
+	flags.Var(&aiAgents, "ai-agent", "AI review agent: correctness or security (repeatable)")
 	expectedReviewID := flags.String("expected-review-id", "", "reject review if the staged snapshot no longer matches this ID")
 	var excludes stringListFlag
 	flags.Var(&excludes, "exclude", "additional path pattern to exclude (repeatable)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: reviewer review --staged [--format human|json] [--repo PATH] [--exclude PATTERN] [--ai-provider PROVIDER --ai-model MODEL]")
+		fmt.Fprintln(stderr, "Usage: reviewer review --staged [--format human|json] [--repo PATH] [--exclude PATTERN] [--ai-provider PROVIDER --ai-model MODEL --ai-agent AGENT]")
 		fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
@@ -79,6 +81,9 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 	aiConfig := config.DefaultAI()
 	aiConfig.Provider = config.AIProvider(*aiProvider)
 	aiConfig.Model = *aiModel
+	if len(aiAgents) > 0 {
+		aiConfig.Agents = append([]string(nil), aiAgents...)
+	}
 	if err := aiConfig.Validate(); err != nil {
 		fmt.Fprintf(stderr, "invalid AI configuration: %v\n", err)
 		return 2
@@ -153,6 +158,21 @@ type stringListFlag []string
 
 func (f *stringListFlag) String() string {
 	return strings.Join(*f, ",")
+}
+
+type valueListFlag []string
+
+func (f *valueListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *valueListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("value cannot be empty")
+	}
+	*f = append(*f, value)
+	return nil
 }
 
 func (f *stringListFlag) Set(value string) error {

@@ -17,7 +17,7 @@ const summary = {
 };
 (0, node_test_1.default)("selectAIReview disables diff UI for local-only results", () => {
     const result = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         reviewId: `sha256:${"a".repeat(64)}`,
         summary: { ...summary, findingCount: 0 },
         files: [],
@@ -27,7 +27,7 @@ const summary = {
 });
 (0, node_test_1.default)("selectAIReview uses provider-reviewed paths and AI findings only", () => {
     const result = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         reviewId: `sha256:${"a".repeat(64)}`,
         summary,
         files: [{ path: "main.go", status: "modified" }, { path: ".env", status: "modified" }],
@@ -55,7 +55,7 @@ const summary = {
 });
 (0, node_test_1.default)("selectAIReview does not list provider-reviewed files without comments", () => {
     const result = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         reviewId: `sha256:${"c".repeat(64)}`,
         summary: { ...summary, findingCount: 0 },
         files: [{ path: "main.go", status: "modified" }],
@@ -74,6 +74,8 @@ const summary = {
 });
 function finding(file, source) {
     return {
+        ruleId: source === "ai" ? "ai/correctness" : "secrets/hardcoded-secret",
+        findingId: `sha256:${(source === "ai" ? "d" : "e").repeat(64)}`,
         file,
         startLine: 1,
         endLine: 1,

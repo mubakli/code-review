@@ -75,7 +75,11 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI prompt builder: %w", err)
 	}
-	orchestrator, err := ai.NewOrchestrator(builder, provider)
+	agents, err := ai.SelectAgents(options.AI.Agents)
+	if err != nil {
+		return review.Result{}, fmt.Errorf("configure AI review agents: %w", err)
+	}
+	orchestrator, err := ai.NewOrchestratorWithAgents(builder, provider, agents)
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI orchestrator: %w", err)
 	}

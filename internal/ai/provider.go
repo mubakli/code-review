@@ -27,7 +27,7 @@ func newAnalysisRequest(instructions, rawDiff string, staticFindings []findings.
 	return AnalysisRequest{
 		instructions:   instructions,
 		diff:           redacted.Text,
-		staticFindings: append([]findings.Finding(nil), staticFindings...),
+		staticFindings: findings.Clone(staticFindings),
 		redactionCount: priorRedactions + redacted.Count,
 	}
 }
@@ -41,7 +41,7 @@ func (r AnalysisRequest) Diff() string {
 }
 
 func (r AnalysisRequest) StaticFindings() []findings.Finding {
-	return append([]findings.Finding(nil), r.staticFindings...)
+	return findings.Clone(r.staticFindings)
 }
 
 func (r AnalysisRequest) RedactionCount() int {

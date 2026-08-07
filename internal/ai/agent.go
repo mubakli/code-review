@@ -1,11 +1,37 @@
 package ai
 
 import (
+	"fmt"
 	"strings"
 
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
+
+func SelectAgents(ids []string) ([]ReviewAgent, error) {
+	available := make(map[AgentID]ReviewAgent)
+	for _, agent := range DefaultAgents() {
+		available[agent.ID] = agent
+	}
+	selected := make([]ReviewAgent, 0, len(ids))
+	seen := make(map[AgentID]struct{}, len(ids))
+	for _, value := range ids {
+		id := AgentID(strings.TrimSpace(value))
+		agent, exists := available[id]
+		if !exists {
+			return nil, fmt.Errorf("unsupported AI review agent %q", value)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("duplicate AI review agent %q", value)
+		}
+		seen[id] = struct{}{}
+		selected = append(selected, agent)
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("at least one AI review agent is required")
+	}
+	return selected, nil
+}
 
 type AgentID string
 
@@ -20,7 +46,7 @@ type ReviewAgent struct {
 	Categories   map[findings.Category]struct{}
 }
 
-const agentBaseInstructions = `Review only issues introduced by these staged changes. Report findings on changed lines with evidence from the supplied diff. Do not invent runtime behavior, missing context, or unrelated legacy issues. Return structured findings only.`
+const agentBaseInstructions = `Review only issues introduced by these staged changes. Report findings on changed lines with evidence from the supplied diff. Do not invent runtime behavior, missing context, or unrelated legacy issues. Return structured findings only. Set proposedFix only when you can provide an exact replacement for the finding's complete added-line range; use replacement text without diff prefixes, or null when an exact safe fix is not possible.`
 
 func DefaultAgents() []ReviewAgent {
 	return []ReviewAgent{

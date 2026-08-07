@@ -22,12 +22,14 @@ type AI struct {
 	Provider        AIProvider
 	Model           string
 	MaxOutputTokens int
+	Agents          []string
 }
 
 func DefaultAI() AI {
 	return AI{
 		Provider:        AIProviderNone,
 		MaxOutputTokens: DefaultMaxOutputTokens,
+		Agents:          []string{"correctness", "security"},
 	}
 }
 
@@ -56,6 +58,22 @@ func (c AI) Validate() error {
 	}
 	if c.MaxOutputTokens <= 0 {
 		return fmt.Errorf("AI max output tokens must be positive")
+	}
+	if c.Enabled() {
+		if len(c.Agents) == 0 {
+			return fmt.Errorf("at least one AI review agent is required")
+		}
+		seen := make(map[string]struct{}, len(c.Agents))
+		for _, agent := range c.Agents {
+			agent = strings.TrimSpace(agent)
+			if agent != "correctness" && agent != "security" {
+				return fmt.Errorf("unsupported AI review agent %q", agent)
+			}
+			if _, exists := seen[agent]; exists {
+				return fmt.Errorf("duplicate AI review agent %q", agent)
+			}
+			seen[agent] = struct{}{}
+		}
 	}
 	return nil
 }

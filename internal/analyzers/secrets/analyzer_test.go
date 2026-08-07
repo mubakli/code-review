@@ -38,6 +38,12 @@ func TestSecretAnalyzerChecksOnlyAddedLinesWithoutLeakingValues(t *testing.T) {
 	if values[0].Severity != findings.SeverityHigh || values[0].StartLine != 4 {
 		t.Errorf("provider finding = %#v", values[0])
 	}
+	wantRules := []string{"secrets/provider-credential", "secrets/hardcoded-secret", "secrets/hardcoded-secret"}
+	for index, finding := range values {
+		if finding.RuleID != wantRules[index] || finding.FindingID != "" || finding.ProposedFix != nil {
+			t.Errorf("finding %d identity/fix = %#v", index, finding)
+		}
+	}
 	if values[1].Severity != findings.SeverityMedium || values[1].StartLine != 5 {
 		t.Errorf("literal finding = %#v", values[1])
 	}
@@ -59,7 +65,7 @@ func TestDetectSecretClassifiesPrivateKeys(t *testing.T) {
 
 	for _, header := range []string{"-----BEGIN PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----"} {
 		match, detected := detectSecret(header)
-		if !detected || match.severity != findings.SeverityCritical {
+		if !detected || match.severity != findings.SeverityCritical || match.ruleID != "secrets/private-key" {
 			t.Errorf("detectSecret(%q) = %#v, %v", header, match, detected)
 		}
 	}

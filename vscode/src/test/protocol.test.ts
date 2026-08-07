@@ -4,7 +4,7 @@ import test from "node:test";
 import { parseReviewResult, parseSnapshotResult } from "../protocol";
 
 const validResult = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   reviewId: `sha256:${"a".repeat(64)}`,
   summary: {
     filesChanged: 1,
@@ -17,6 +17,8 @@ const validResult = {
   },
   files: [{ path: "main.go", status: "modified" }],
   findings: [{
+    ruleId: "secrets/hardcoded-secret",
+    findingId: `sha256:${"c".repeat(64)}`,
     file: "main.go",
     startLine: 3,
     endLine: 3,
@@ -32,7 +34,7 @@ const validResult = {
 
 test("parseReviewResult accepts the CLI schema", () => {
   const result = parseReviewResult(JSON.stringify(validResult));
-  assert.equal(result.schemaVersion, 2);
+  assert.equal(result.schemaVersion, 3);
   assert.equal(result.findings[0].file, "main.go");
 });
 
@@ -83,9 +85,48 @@ test("parseReviewResult accepts AI-reviewed file paths", () => {
   assert.deepEqual(result.ai?.agents, ["correctness"]);
 });
 
+test("parseReviewResult validates structured proposed fixes", () => {
+  const proposedFix = {
+    description: "Use the returned error.",
+    startLine: 3,
+    endLine: 3,
+    replacement: "if err != nil { return err }"
+  };
+  const result = parseReviewResult(JSON.stringify({
+    ...validResult,
+    findings: [{ ...validResult.findings[0], proposedFix }]
+  }));
+  assert.deepEqual(result.findings[0].proposedFix, proposedFix);
+
+  assert.throws(
+    () => parseReviewResult(JSON.stringify({
+      ...validResult,
+      findings: [{ ...validResult.findings[0], proposedFix: { ...proposedFix, startLine: 2 } }]
+    })),
+    /range must match/
+  );
+});
+
+test("parseReviewResult requires stable rule and finding IDs", () => {
+  assert.throws(
+    () => parseReviewResult(JSON.stringify({
+      ...validResult,
+      findings: [{ ...validResult.findings[0], ruleId: "Security Rule" }]
+    })),
+    /safe lowercase namespace/
+  );
+  assert.throws(
+    () => parseReviewResult(JSON.stringify({
+      ...validResult,
+      findings: [{ ...validResult.findings[0], findingId: "unstable" }]
+    })),
+    /SHA-256 identifier/
+  );
+});
+
 test("parseSnapshotResult validates deterministic review IDs", () => {
   const snapshot = parseSnapshotResult(JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     reviewId: `sha256:${"b".repeat(64)}`,
     filesChanged: 3
   }));

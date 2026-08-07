@@ -1,12 +1,18 @@
 {
   "name": "code-review",
   "displayName": "Code Review",
-  "version": "0.1.0",
-  "publisher": "local",
-  "license": "UNLICENSED",
+  "description": "Local-first staged code review with deterministic and optional AI analysis.",
+  "version": "0.2.0",
+  "publisher": "mubakli",
+  "license": "MIT",
+  "author": "mubakli",
   "repository": {
     "type": "git",
     "url": "https://github.com/mubakli/code-review.git"
+  },
+  "homepage": "https://github.com/mubakli/code-review#readme",
+  "bugs": {
+    "url": "https://github.com/mubakli/code-review/issues"
   },
   "engines": {
     "vscode": "^1.96.0"
@@ -18,9 +24,12 @@
     "onCommand:code-review.clearOpenAIAPIKey",
     "onCommand:code-review.configureAIProvider",
     "onCommand:code-review.selectAIModel",
+    "onCommand:code-review.selectAIAgents",
     "onCommand:code-review.manageAIKey",
     "onCommand:code-review.pauseAutoReview",
     "onCommand:code-review.resumeAutoReview",
+    "onCommand:code-review.previewSuggestedFix",
+    "onCommand:code-review.applySuggestedFix",
     "onView:code-review.reviewView"
   ],
   "main": "./out/extension.js",
@@ -57,6 +66,11 @@
         "category": "Code Review"
       },
       {
+        "command": "code-review.selectAIAgents",
+        "title": "Select AI Review Agents",
+        "category": "Code Review"
+      },
+      {
         "command": "code-review.manageAIKey",
         "title": "Manage AI API Key",
         "category": "Code Review"
@@ -80,6 +94,18 @@
         "command": "code-review.resumeAutoReview",
         "title": "Resume Automatic Reviews",
         "category": "Code Review"
+      },
+      {
+        "command": "code-review.previewSuggestedFix",
+        "title": "Preview Suggested Fix",
+        "category": "Code Review",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "code-review.applySuggestedFix",
+        "title": "Apply Suggested Fix to Working Tree",
+        "category": "Code Review",
+        "icon": "$(check)"
       }
     ],
     "viewsContainers": {
@@ -122,9 +148,31 @@
           "group": "navigation"
         }
       ],
+      "view/item/context": [
+        {
+          "command": "code-review.previewSuggestedFix",
+          "when": "view == code-review.reviewView && viewItem == reviewFindingFix",
+          "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "code-review.applySuggestedFix",
+          "when": "resourceScheme == code-review-suggested && resourceFilename == suggested",
+          "group": "navigation"
+        }
+      ],
       "commandPalette": [
         {
           "command": "code-review.openStagedDiff",
+          "when": "false"
+        },
+        {
+          "command": "code-review.previewSuggestedFix",
+          "when": "false"
+        },
+        {
+          "command": "code-review.applySuggestedFix",
           "when": "false"
         }
       ]
@@ -180,6 +228,18 @@
           "scope": "resource",
           "description": "Enable optional AI analysis after local review."
         },
+        "codeReview.ai.agents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["correctness", "security"]
+          },
+          "default": ["correctness", "security"],
+          "minItems": 1,
+          "uniqueItems": true,
+          "scope": "resource",
+          "description": "AI specialist agents available for staged review. Security still runs only for security-relevant changes."
+        },
         "codeReview.ai.autoReview": {
           "type": "boolean",
           "default": true,
@@ -193,11 +253,11 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "check": "tsc --noEmit -p ./",
-    "test": "npm run compile && node --test out/test/aiReview.test.js out/test/autoReview.test.js out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/providers.test.js out/test/stagedFiles.test.js",
+    "test": "npm run compile && node --test out/test/agents.test.js out/test/aiReview.test.js out/test/autoReview.test.js out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/providers.test.js out/test/stagedFiles.test.js out/test/suggestedFix.test.js",
     "test:integration": "npm run compile && node out/test/runTest.js",
     "test:all": "npm test && npm run test:integration",
     "vscode:prepublish": "npm run compile",
-    "package:vsix": "npm run compile && vsce package --no-dependencies --skip-license --out code-review-0.1.0.vsix"
+    "package:vsix": "npm run compile && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

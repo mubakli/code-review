@@ -25,6 +25,12 @@ func TestMergeConsolidatesLocalAndAIDuplicates(t *testing.T) {
 		Title:      "Unsanitized input may reach SQL query",
 		Message:    "The changed SQL construction may allow injection.",
 		Suggestion: "Use a parameterized query.",
+		ProposedFix: &ProposedFix{
+			Description: "Parameterize the query.",
+			StartLine:   42,
+			EndLine:     42,
+			Replacement: "query := parameterized(input)",
+		},
 		Confidence: 0.94,
 		Source:     SourceAI,
 	}
@@ -41,6 +47,34 @@ func TestMergeConsolidatesLocalAndAIDuplicates(t *testing.T) {
 	}
 	if merged[0].Suggestion != ai.Suggestion {
 		t.Fatalf("missing suggestion was not filled: %#v", merged[0])
+	}
+	if merged[0].ProposedFix == nil || merged[0].ProposedFix.Replacement != ai.ProposedFix.Replacement {
+		t.Fatalf("missing proposed fix was not filled: %#v", merged[0])
+	}
+	ai.ProposedFix.Replacement = "mutated"
+	if merged[0].ProposedFix.Replacement == "mutated" {
+		t.Fatal("merged proposed fix aliases secondary input")
+	}
+}
+
+func TestMergePreservesPrimaryFixWithoutAliasing(t *testing.T) {
+	t.Parallel()
+
+	primaryFix := &ProposedFix{Description: "Primary", StartLine: 1, EndLine: 1, Replacement: "primary"}
+	secondaryFix := &ProposedFix{Description: "Secondary", StartLine: 1, EndLine: 1, Replacement: "secondary"}
+	base := Finding{File: "a.go", StartLine: 1, EndLine: 1, Severity: SeverityMedium, Category: CategoryCorrectness, Title: "Wrong result", Message: "Wrong result returned.", Confidence: 0.8}
+	primary := base
+	primary.ProposedFix = primaryFix
+	secondary := base
+	secondary.ProposedFix = secondaryFix
+
+	merged := Merge([]Finding{primary}, []Finding{secondary})
+	if len(merged) != 1 || merged[0].ProposedFix == nil || merged[0].ProposedFix.Replacement != "primary" {
+		t.Fatalf("Merge() replaced primary fix: %#v", merged)
+	}
+	merged[0].ProposedFix.Replacement = "mutated"
+	if primaryFix.Replacement == "mutated" || secondaryFix.Replacement == "mutated" {
+		t.Fatal("merged fix aliases an input")
 	}
 }
 

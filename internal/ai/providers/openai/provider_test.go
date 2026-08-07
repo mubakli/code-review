@@ -49,6 +49,20 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 		if !ok || format["type"] != "json_schema" || format["strict"] != true {
 			t.Fatalf("structured format = %#v", text["format"])
 		}
+		schema, _ := format["schema"].(map[string]any)
+		properties, _ := schema["properties"].(map[string]any)
+		findingsSchema, _ := properties["findings"].(map[string]any)
+		items, _ := findingsSchema["items"].(map[string]any)
+		findingProperties, _ := items["properties"].(map[string]any)
+		fixSchema, ok := findingProperties["proposedFix"].(map[string]any)
+		if !ok || len(fixSchema["anyOf"].([]any)) != 2 {
+			t.Fatalf("proposedFix schema = %#v", findingProperties["proposedFix"])
+		}
+		for _, forbidden := range []string{"ruleId", "findingId"} {
+			if _, exists := findingProperties[forbidden]; exists {
+				t.Fatalf("provider schema accepts trusted field %q", forbidden)
+			}
+		}
 
 		structured, err := json.Marshal(ai.AnalysisResponse{
 			Status: ai.ResponseStatusComplete,
@@ -61,6 +75,12 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 				Title:      "Potential credential",
 				Message:    "A credential may be exposed.",
 				Suggestion: "Use secret storage.",
+				ProposedFix: &findings.ProposedFix{
+					Description: "Read from secret storage.",
+					StartLine:   2,
+					EndLine:     2,
+					Replacement: "password = loadSecret()",
+				},
 				Confidence: 0.95,
 			}},
 		})
@@ -96,6 +116,9 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 	}
 	if response.Status != ai.ResponseStatusComplete || len(response.Findings) != 1 {
 		t.Fatalf("response = %#v", response)
+	}
+	if response.Findings[0].ProposedFix == nil || response.Findings[0].ProposedFix.Replacement != "password = loadSecret()" {
+		t.Fatalf("proposed fix = %#v", response.Findings[0].ProposedFix)
 	}
 }
 

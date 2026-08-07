@@ -55,6 +55,12 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 					Title:      "Ignored error",
 					Message:    "The returned error is discarded.",
 					Suggestion: "Handle or explicitly justify the error.",
+					ProposedFix: &findings.ProposedFix{
+						Description: "Handle the returned error.",
+						StartLine:   3,
+						EndLine:     3,
+						Replacement: "result, err := run()",
+					},
 					Confidence: 0.91,
 				},
 			},
@@ -90,6 +96,9 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 	if ignoredError == nil || ignoredError.Source != findings.SourceAI || ignoredError.AgentID != string(ai.AgentCorrectness) {
 		t.Fatalf("AI finding was not retained with AI source: %#v", result.Findings)
 	}
+	if ignoredError.RuleID != "ai/correctness" || !strings.HasPrefix(ignoredError.FindingID, "sha256:") || ignoredError.ProposedFix == nil {
+		t.Fatalf("AI finding identity/fix was not finalized: %#v", ignoredError)
+	}
 }
 
 func TestOrchestratorRejectsInvalidResponsesWithoutLosingLocalFindings(t *testing.T) {
@@ -115,7 +124,9 @@ func TestOrchestratorRejectsInvalidResponsesWithoutLosingLocalFindings(t *testin
 		{name: "unknown status", response: &ai.AnalysisResponse{Status: "need_context"}},
 		{name: "outside file", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withFile(validCandidate, "other.go")}}},
 		{name: "unchanged line", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withLine(validCandidate, 99)}}},
+		{name: "range includes unchanged line", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withRange(validCandidate, 2, 3)}}},
 		{name: "invalid severity", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withSeverity(validCandidate, "unknown")}}},
+		{name: "fix range differs", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withFix(validCandidate, &findings.ProposedFix{Description: "Replace line.", StartLine: 1, EndLine: 1, Replacement: "changed()"})}}},
 	}
 
 	for _, test := range tests {
@@ -238,7 +249,8 @@ func addedFile(path string, additions []string) change.ChangeSet {
 }
 
 func localFinding(file string, line int, title, message string) findings.Finding {
-	return findings.Finding{
+	finding := findings.Finding{
+		RuleID:     "test/local-rule",
 		File:       file,
 		StartLine:  line,
 		EndLine:    line,
@@ -249,6 +261,8 @@ func localFinding(file string, line int, title, message string) findings.Finding
 		Confidence: 0.82,
 		Source:     findings.SourceLocalRule,
 	}
+	finding.FinalizeID()
+	return finding
 }
 
 func findByTitle(values []findings.Finding, title string) *findings.Finding {
@@ -273,5 +287,16 @@ func withLine(value ai.ResponseFinding, line int) ai.ResponseFinding {
 
 func withSeverity(value ai.ResponseFinding, severity findings.Severity) ai.ResponseFinding {
 	value.Severity = severity
+	return value
+}
+
+func withRange(value ai.ResponseFinding, start, end int) ai.ResponseFinding {
+	value.StartLine = start
+	value.EndLine = end
+	return value
+}
+
+func withFix(value ai.ResponseFinding, fix *findings.ProposedFix) ai.ResponseFinding {
+	value.ProposedFix = fix
 	return value
 }

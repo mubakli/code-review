@@ -148,7 +148,7 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	return &analysis, nil
 }
 
-const structuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"status":"complete","findings":[{"file":"relative/path","startLine":1,"endLine":1,"severity":"critical|high|medium|low|info","category":"security|correctness|performance|database|maintainability|quality","title":"short title","message":"evidence-based explanation","suggestion":"concise remediation or empty string","confidence":0.0}]}. Use an empty findings array when no issue exists.`
+const structuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"status":"complete","findings":[{"file":"relative/path","startLine":1,"endLine":1,"severity":"critical|high|medium|low|info","category":"security|correctness|performance|database|maintainability|quality","title":"short title","message":"evidence-based explanation","suggestion":"concise remediation or empty string","proposedFix":null,"confidence":0.0}]}. Every finding must include proposedFix as null or {"description":"nonblank description","startLine":1,"endLine":1,"replacement":"complete replacement text without diff prefixes"}. A proposed fix replaces complete lines, its range must exactly equal the finding range, and every line in both ranges must be an added diff line. Use null unless an exact safe replacement is possible. Never use redaction or truncation placeholders in replacement text. Do not return ruleId or findingId; those are assigned by the reviewer. Use an empty findings array when no issue exists.`
 
 type chatRequest struct {
 	Model           string         `json:"model"`

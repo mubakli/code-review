@@ -65,6 +65,11 @@ export class AICommentPresenter implements vscode.Disposable {
       body.appendMarkdown("\n\n---\n\n**Suggested action**\n\n");
       body.appendText(finding.suggestion);
     }
+    if (finding.proposedFix !== undefined) {
+      body.appendMarkdown("\n\n---\n\n**Proposed fix available**\n\n");
+      body.appendText(finding.proposedFix.description);
+      body.appendMarkdown("\n\nUse the lightbulb in the editor or the Review Comments context menu to preview it.");
+    }
     body.appendMarkdown(
       `\n\n_${escapeMarkdown(provider)} · ${escapeMarkdown(finding.agentId ?? "AI review")}_`
     );
