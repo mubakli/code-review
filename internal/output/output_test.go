@@ -27,6 +27,24 @@ func TestWriteJSON(t *testing.T) {
 	}
 }
 
+func TestWriteJSONIncludesOptionalAISummary(t *testing.T) {
+	t.Parallel()
+
+	result := sampleResult()
+	result.AI = &review.AISummary{Provider: "openai", Model: "review-model", BatchCount: 2, SuccessfulBatches: 1, FailedBatches: 1}
+	var output bytes.Buffer
+	if err := WriteJSON(&output, result); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+	var decoded review.Result
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if decoded.AI == nil || decoded.AI.Provider != "openai" || decoded.AI.FailedBatches != 1 {
+		t.Fatalf("decoded AI summary = %#v", decoded.AI)
+	}
+}
+
 func TestWriteHuman(t *testing.T) {
 	t.Parallel()
 
@@ -44,6 +62,30 @@ func TestWriteHuman(t *testing.T) {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("output does not contain %q:\n%s", expected, output.String())
 		}
+	}
+}
+
+func TestWriteHumanIncludesAISummary(t *testing.T) {
+	t.Parallel()
+
+	result := sampleResult()
+	result.AI = &review.AISummary{
+		Provider:          "openai",
+		Model:             "review-model",
+		BatchCount:        3,
+		SuccessfulBatches: 2,
+		FailedBatches:     1,
+		Failures:          []review.AIFailure{{Batch: 2, Files: []string{"config.go"}, Message: "rate limit\u001b[31m"}},
+	}
+	var output bytes.Buffer
+	if err := WriteHuman(&output, result); err != nil {
+		t.Fatalf("WriteHuman() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "AI review (openai/review-model): 2 of 3 batches succeeded, 1 failed.") {
+		t.Fatalf("AI summary is missing:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "AI batch 2 failed for config.go: rate limit�[31m") || strings.Contains(output.String(), "\u001b") {
+		t.Fatalf("AI failure was not safely rendered:\n%s", output.String())
 	}
 }
 

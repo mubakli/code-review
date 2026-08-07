@@ -27,6 +27,22 @@ type Result struct {
 	SchemaVersion int                `json:"schemaVersion"`
 	Summary       Summary            `json:"summary"`
 	Findings      []findings.Finding `json:"findings"`
+	AI            *AISummary         `json:"ai,omitempty"`
+}
+
+type AISummary struct {
+	Provider          string      `json:"provider"`
+	Model             string      `json:"model"`
+	BatchCount        int         `json:"batchCount"`
+	SuccessfulBatches int         `json:"successfulBatches"`
+	FailedBatches     int         `json:"failedBatches"`
+	Failures          []AIFailure `json:"failures,omitempty"`
+}
+
+type AIFailure struct {
+	Batch   int      `json:"batch"`
+	Files   []string `json:"files"`
+	Message string   `json:"message"`
 }
 
 type Service struct {

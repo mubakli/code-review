@@ -43,6 +43,30 @@ func WriteHuman(writer io.Writer, result review.Result) error {
 		result.Summary.DeletedLines,
 		plural(result.Summary.DeletedLines, "deletion", "deletions"),
 	)
+	if result.AI != nil {
+		fmt.Fprintf(
+			&output,
+			"AI review (%s/%s): %d of %d batches succeeded, %d failed.\n",
+			result.AI.Provider,
+			result.AI.Model,
+			result.AI.SuccessfulBatches,
+			result.AI.BatchCount,
+			result.AI.FailedBatches,
+		)
+		for _, failure := range result.AI.Failures {
+			files := make([]string, 0, len(failure.Files))
+			for _, file := range failure.Files {
+				files = append(files, displayPath(file))
+			}
+			fmt.Fprintf(
+				&output,
+				"AI batch %d failed for %s: %s\n",
+				failure.Batch,
+				strings.Join(files, ", "),
+				displayText(failure.Message),
+			)
+		}
+	}
 	if len(result.Findings) == 0 {
 		output.WriteString("No findings.\n")
 		_, err := io.WriteString(writer, output.String())
@@ -69,13 +93,25 @@ func writeFinding(output *strings.Builder, finding findings.Finding) {
 		strings.ToUpper(string(finding.Severity)),
 		finding.Category,
 		location,
-		finding.Title,
-		finding.Message,
+		displayText(finding.Title),
+		displayText(finding.Message),
 	)
 	if finding.Suggestion != "" {
-		fmt.Fprintf(output, "\nSuggestion:\n%s\n", finding.Suggestion)
+		fmt.Fprintf(output, "\nSuggestion:\n%s\n", displayText(finding.Suggestion))
 	}
 	fmt.Fprintf(output, "Source: %s | Confidence: %.0f%%\n", finding.Source, finding.Confidence*100)
+}
+
+func displayText(value string) string {
+	return strings.Map(func(character rune) rune {
+		if character == '\n' || character == '\t' {
+			return character
+		}
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return '\uFFFD'
+		}
+		return character
+	}, value)
 }
 
 func displayPath(value string) string {

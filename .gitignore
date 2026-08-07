@@ -2,3 +2,7 @@
 .sentinel/
 coverage.out
 reviewer
+
+.env
+.env.*
+!.env.example

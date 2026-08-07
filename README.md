@@ -31,7 +31,7 @@ The first local rule checks added lines for likely hardcoded credentials. A
 finding contains only the location and remediation guidance; the detected
 value is never copied into output.
 
-Code intended for a future AI provider passes through a separate,
+Code intended for an AI provider passes through a separate,
 language-agnostic redaction boundary. Provider requests cannot directly set raw
 diff content; `ai.Builder` redacts it locally before exposing a request to a
 provider implementation.
@@ -51,8 +51,8 @@ file/hunk-aware token batching
 budgeted AnalysisRequest values
 ```
 
-This diff-only fallback works for every text-based codebase. No provider is
-invoked by the CLI yet.
+This diff-only fallback works for every text-based codebase. The CLI invokes a
+provider only when AI review is explicitly enabled.
 
 ## Usage
 
@@ -62,10 +62,18 @@ go build -o reviewer ./cmd/reviewer
 ./reviewer review --staged --format json
 ./reviewer review --staged --repo /path/to/repository
 ./reviewer review --staged --exclude 'testdata/fixtures/'
+
+export REVIEWER_OPENAI_API_KEY='your-key'
+./reviewer review --staged --ai-provider openai --ai-model your-model
 ```
 
 The command returns a non-zero exit code for usage, Git, parsing, or analysis
 errors. Findings do not block a commit in this milestone.
+
+AI review is opt-in. Provider and model are safe settings, but API keys are
+never accepted as command-line flags or repository configuration. The CLI
+currently reads the OpenAI key from `REVIEWER_OPENAI_API_KEY`; the future VS
+Code adapter will source it from `SecretStorage`.
 
 ## Default Exclusions
 
@@ -106,7 +114,10 @@ configuration will be added with the context engine.
   budget using a conservative provider-independent estimate.
 - Large diffs are grouped file-first and then split at hunk/line boundaries;
   oversized lines carry an explicit truncation marker.
-- No AI provider is called in this milestone.
+- AI review is disabled by default and never runs without explicit provider and
+  model settings.
+- OpenAI requests set `store: false`, use strict structured output, and bound
+  response size. Provider failures preserve local findings.
 
 ## Package Boundaries
 
@@ -121,6 +132,9 @@ configuration will be added with the context engine.
 - `internal/ai` owns safe requests, token budgeting, batching, and the
   vendor-neutral provider boundary and resilient orchestration.
 - `internal/ai/providers/mock` provides deterministic orchestration tests.
+- `internal/ai/providers/openai` is the first real provider adapter.
+- `internal/config` validates safe provider and model settings and never stores
+  API keys.
 - `internal/output` renders stable JSON or terminal output.
 - `cmd/reviewer` is the composition root that selects concrete adapters.
 
@@ -139,6 +153,6 @@ go test ./...
 go vet ./...
 ```
 
-The next milestone is the first real provider adapter plus provider/model
-configuration. It will remain opt-in, use a user-owned API key, and preserve
-local findings when the provider is unavailable.
+The next milestone is the minimal VS Code process adapter: secure key retrieval
+through `SecretStorage`, provider/model settings, the staged-review command,
+and diagnostics backed by the existing JSON result contract.

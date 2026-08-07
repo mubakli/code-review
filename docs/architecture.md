@@ -36,6 +36,8 @@ internal/
   ai/                    provider port, safe requests, prompt batching
     providers/
       mock/              deterministic orchestration adapter
+      openai/            OpenAI Responses API adapter
+  config/                safe provider and model settings
   redact/                provider-egress secret redaction
   pathfilter/             repository-relative path matching
   output/                 human and JSON presentation
@@ -50,7 +52,10 @@ needs them.
 cmd/reviewer
   -> git
   -> review
+  -> ai
+  -> ai/providers/openai
   -> analyzers/secrets
+  -> config
   -> pathfilter
   -> output
 
@@ -70,6 +75,9 @@ ai
   -> change
   -> findings
   -> redact
+
+ai/providers/openai
+  -> ai
 
 output
   -> review
@@ -157,7 +165,6 @@ Add these packages only when their features are implemented:
 internal/
   ai/
     providers/
-      openai/
       anthropic/
       gemini/
       ollama/
@@ -173,7 +180,6 @@ internal/
     python/
   index/
   cache/
-  config/
   protocol/
 
 vscode/
@@ -215,6 +221,16 @@ Provider implementations receive only:
 
 They do not receive repository handles, absolute repository paths, API keys,
 or permission to resolve additional files directly.
+
+API keys are runtime secrets, not configuration values. The CLI currently
+accepts the OpenAI key only through `REVIEWER_OPENAI_API_KEY`. The VS Code
+adapter will read keys from `SecretStorage` and pass them only to the local Go
+process. Provider and model names may be persisted because they are not secret.
+
+The OpenAI adapter uses the Responses API with `store: false`, strict JSON
+schema output, context-aware HTTP requests, HTTPS-only remote endpoints, and a
+bounded response body. SDK-specific request and response types remain inside
+the provider package.
 
 ## AI Orchestration
 
