@@ -20,11 +20,10 @@ the same staged snapshot. **Code Review: Review Staged Changes** remains an
 explicit force re-run command.
 
 For local-only review, findings appear only in Problems. To enable AI review,
-set `codeReview.ai.enabled`, set `codeReview.provider` to `openai`, set
-`codeReview.model`, then run
-**Code Review: Set OpenAI API Key**. The key is stored in VS Code
-`SecretStorage`. The extension also asks for repository/model approval before
-the first provider request.
+run **Code Review: Configure AI Provider**. The guided flow selects OpenAI or
+DeepSeek, offers recommended models or a custom model ID, stores the provider's
+API key in VS Code `SecretStorage`, and enables automatic AI review. Provider
+keys remain separate. Choosing **Local review only** disables external requests.
 
 After AI review, VS Code opens a side-by-side `HEAD ↔ Staged` diff. The Source
 Control **AI Review** view lists only files the CLI reports as sent to the

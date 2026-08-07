@@ -195,6 +195,12 @@ Provider packages may import `internal/ai`; `internal/ai` must not import a
 provider implementation. Parser packages may implement contracts consumed by
 the context engine; the context engine must not hardcode every language.
 
+Provider selection is registry-driven at the VS Code boundary and concrete at
+the Go composition root. OpenAI uses its Responses API adapter; DeepSeek uses a
+separate Chat Completions adapter. Both implement `ai.Provider`, receive only
+redacted `AnalysisRequest` values, enforce bounded HTTPS responses, and keep
+provider-specific API keys out of persisted settings and Git subprocesses.
+
 The VS Code TypeScript layer remains a process and UI adapter. It starts the Go
 binary, stores API keys in `SecretStorage`, maps JSON findings to diagnostics,
 and manages settings. Review policy does not move into TypeScript.

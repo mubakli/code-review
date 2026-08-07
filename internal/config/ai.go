@@ -9,8 +9,8 @@ import (
 type AIProvider string
 
 const (
-	AIProviderNone   AIProvider = "none"
-	AIProviderOpenAI AIProvider = "openai"
+	AIProviderNone     AIProvider = "none"
+	AIProviderOpenAI   AIProvider = "openai"
 	AIProviderDeepSeek AIProvider = "deepseek"
 )
 

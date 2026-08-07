@@ -28,6 +28,7 @@ type Options struct {
 	Endpoint        string
 	MaxOutputTokens int
 	HTTPClient      *http.Client
+	AllowHTTP       bool
 }
 
 type Provider struct {
@@ -54,7 +55,7 @@ func New(options Options) (*Provider, error) {
 		endpoint = defaultEndpoint
 	}
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+	if err != nil || (parsed.Scheme != "https" && !(options.AllowHTTP && parsed.Scheme == "http")) || parsed.Host == "" || parsed.User != nil {
 		return nil, fmt.Errorf("DeepSeek endpoint must be an HTTPS URL without credentials")
 	}
 	maxOutputTokens := options.MaxOutputTokens

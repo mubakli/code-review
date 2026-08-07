@@ -72,6 +72,9 @@ go build -o reviewer ./cmd/reviewer
 
 export REVIEWER_OPENAI_API_KEY='your-key'
 ./reviewer review --staged --ai-provider openai --ai-model your-model
+
+export REVIEWER_DEEPSEEK_API_KEY='your-key'
+./reviewer review --staged --ai-provider deepseek --ai-model deepseek-chat
 ```
 
 The command returns a non-zero exit code for usage, Git, parsing, or analysis
@@ -83,7 +86,7 @@ trigger. Git/SCM events are debounced, then the CLI derives a deterministic
 skipped and stale local or AI results are cancelled or discarded. The manual
 review command remains available as a force re-run.
 
-AI review is opt-in. Provider and model are safe settings, but API keys are
+AI review is opt-in. OpenAI and DeepSeek are currently supported. Provider and model are safe settings, but API keys are
 never accepted as command-line flags or repository configuration. The CLI
 reads the OpenAI key from `REVIEWER_OPENAI_API_KEY`; the VS Code adapter sources
 it from `SecretStorage` and supplies it only for AI-enabled review.
@@ -149,6 +152,8 @@ configuration will be added with the context engine.
   vendor-neutral provider boundary and resilient orchestration.
 - `internal/ai/providers/mock` provides deterministic orchestration tests.
 - `internal/ai/providers/openai` is the first real provider adapter.
+- `internal/ai/providers/deepseek` implements the bounded DeepSeek Chat
+  Completions adapter behind the same provider-neutral contract.
 - `internal/config` validates safe provider and model settings and never stores
   API keys.
 - `internal/output` renders stable JSON or terminal output.

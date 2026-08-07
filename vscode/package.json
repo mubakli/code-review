@@ -16,6 +16,7 @@
     "onCommand:code-review.reviewStaged",
     "onCommand:code-review.setOpenAIAPIKey",
     "onCommand:code-review.clearOpenAIAPIKey",
+    "onCommand:code-review.configureAIProvider",
     "onCommand:code-review.pauseAutoReview",
     "onCommand:code-review.resumeAutoReview",
     "onView:code-review.reviewView"
@@ -41,6 +42,11 @@
       {
         "command": "code-review.openStagedDiff",
         "title": "Open AI Review Diff",
+        "category": "Code Review"
+      },
+      {
+        "command": "code-review.configureAIProvider",
+        "title": "Configure AI Provider",
         "category": "Code Review"
       },
       {
@@ -112,7 +118,8 @@
         },
         "codeReview.provider": {
           "type": "string",
-          "enum": ["none", "openai"],
+          "enum": ["none", "openai", "deepseek"],
+          "enumDescriptions": ["Local review only", "OpenAI Responses API", "DeepSeek Chat Completions API"],
           "default": "none",
           "scope": "resource",
           "description": "Optional AI provider. Local review runs when set to none."
@@ -121,7 +128,7 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "description": "AI model name. Required when OpenAI is enabled."
+          "description": "AI model name. Use Configure AI Provider for guided setup."
         },
         "codeReview.autoReview": {
           "type": "boolean",
@@ -156,7 +163,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "check": "tsc --noEmit -p ./",
-    "test": "npm run compile && node --test out/test/aiReview.test.js out/test/autoReview.test.js out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/stagedFiles.test.js",
+    "test": "npm run compile && node --test out/test/aiReview.test.js out/test/autoReview.test.js out/test/environment.test.js out/test/paths.test.js out/test/protocol.test.js out/test/providers.test.js out/test/stagedFiles.test.js",
     "test:integration": "npm run compile && node out/test/runTest.js",
     "test:all": "npm test && npm run test:integration",
     "vscode:prepublish": "npm run compile",

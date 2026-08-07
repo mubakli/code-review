@@ -172,11 +172,12 @@ func TestOpenIgnoresRepositorySelectingEnvironment(t *testing.T) {
 
 func TestGitEnvironmentRemovesReviewerAPIKey(t *testing.T) {
 	t.Setenv("REVIEWER_OPENAI_API_KEY", "must-not-reach-git")
+	t.Setenv("REVIEWER_DEEPSEEK_API_KEY", "must-not-reach-git")
 
 	for _, value := range gitEnvironment() {
 		key, _, _ := strings.Cut(value, "=")
-		if strings.EqualFold(key, "REVIEWER_OPENAI_API_KEY") {
-			t.Fatal("git environment contains the reviewer API key")
+		if strings.EqualFold(key, "REVIEWER_OPENAI_API_KEY") || strings.EqualFold(key, "REVIEWER_DEEPSEEK_API_KEY") {
+			t.Fatalf("git environment contains reviewer API key %q", key)
 		}
 	}
 }

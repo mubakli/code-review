@@ -33,6 +33,7 @@ suite("Code Review extension", () => {
       { mode: 0o600 }
     );
     await execFileAsync("git", ["-C", folder.uri.fsPath, "add", "--", "main.go"]);
+    await vscode.commands.executeCommand("git.refresh");
 
     const findings = await waitFor(() => {
       const values = vscode.languages.getDiagnostics(sourceURI).filter(value => value.source === diagnosticSource);
@@ -45,6 +46,7 @@ suite("Code Review extension", () => {
 
     await writeFile(path.join(folder.uri.fsPath, "main.go"), "package sample\n\nconst safe = true\n", { mode: 0o600 });
     await execFileAsync("git", ["-C", folder.uri.fsPath, "add", "--", "main.go"]);
+    await vscode.commands.executeCommand("git.refresh");
 
     await waitFor(() => {
       const remaining = vscode.languages.getDiagnostics(sourceURI).filter(value => value.source === diagnosticSource);

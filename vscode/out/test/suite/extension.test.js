@@ -62,6 +62,7 @@ suite("Code Review extension", () => {
         await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(sourceURI));
         await (0, promises_1.writeFile)(path.join(folder.uri.fsPath, "main.go"), "package sample\n\nconst apiKey = \"another-actual-secret-value\"\n", { mode: 0o600 });
         await execFileAsync("git", ["-C", folder.uri.fsPath, "add", "--", "main.go"]);
+        await vscode.commands.executeCommand("git.refresh");
         const findings = await waitFor(() => {
             const values = vscode.languages.getDiagnostics(sourceURI).filter(value => value.source === diagnosticSource);
             return values.length === 1 ? values : undefined;
@@ -72,6 +73,7 @@ suite("Code Review extension", () => {
         strict_1.default.equal(findings[0].range.start.line, 2);
         await (0, promises_1.writeFile)(path.join(folder.uri.fsPath, "main.go"), "package sample\n\nconst safe = true\n", { mode: 0o600 });
         await execFileAsync("git", ["-C", folder.uri.fsPath, "add", "--", "main.go"]);
+        await vscode.commands.executeCommand("git.refresh");
         await waitFor(() => {
             const remaining = vscode.languages.getDiagnostics(sourceURI).filter(value => value.source === diagnosticSource);
             return remaining.length === 0 ? true : undefined;

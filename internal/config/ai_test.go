@@ -12,6 +12,7 @@ func TestAIValidate(t *testing.T) {
 	}{
 		{name: "disabled", config: DefaultAI()},
 		{name: "openai", config: AI{Provider: AIProviderOpenAI, Model: "review-model", MaxOutputTokens: 1000}},
+		{name: "deepseek", config: AI{Provider: AIProviderDeepSeek, Model: "deepseek-chat", MaxOutputTokens: 1000}},
 		{name: "model without provider", config: AI{Provider: AIProviderNone, Model: "review-model", MaxOutputTokens: 1000}, wantErr: true},
 		{name: "missing model", config: AI{Provider: AIProviderOpenAI, MaxOutputTokens: 1000}, wantErr: true},
 		{name: "unsupported provider", config: AI{Provider: "unknown", Model: "review-model", MaxOutputTokens: 1000}, wantErr: true},

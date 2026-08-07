@@ -1,0 +1,6 @@
+{
+    "codeReview.provider": "deepseek",
+    "codeReview.model": "deepseek-chat",
+    "codeReview.ai.enabled": true,
+    "codeReview.ai.autoReview": true
+}

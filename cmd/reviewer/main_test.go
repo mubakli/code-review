@@ -275,6 +275,18 @@ func TestConfiguredProviderBuildsOpenAIAdapter(t *testing.T) {
 	}
 }
 
+func TestConfiguredProviderBuildsDeepSeekAdapter(t *testing.T) {
+	t.Setenv(deepSeekAPIKeyEnvironment, "test-key")
+	provider, err := configuredProvider(config.AI{
+		Provider:        config.AIProviderDeepSeek,
+		Model:           "deepseek-chat",
+		MaxOutputTokens: 1000,
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("configuredProvider() = %#v, %v", provider, err)
+	}
+}
+
 func TestReviewStagedRunsConfiguredAIProvider(t *testing.T) {
 	requireGit(t)
 
