@@ -16,7 +16,7 @@ type Provider interface {
 }
 
 type AnalysisRequest struct {
-	instructions    string
+	instructions   string
 	diff           string
 	staticFindings []findings.Finding
 	redactionCount int

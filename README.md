@@ -36,6 +36,24 @@ language-agnostic redaction boundary. Provider requests cannot directly set raw
 diff content; `llm.NewAnalysisRequest` redacts it locally before exposing it to
 a provider implementation.
 
+The provider preparation path is also language-independent:
+
+```text
+filtered text changes
+        |
+        v
+local secret redaction
+        |
+        v
+file/hunk-aware token batching
+        |
+        v
+budgeted AnalysisRequest values
+```
+
+This diff-only fallback works for every text-based codebase. No provider is
+invoked by the CLI yet.
+
 ## Usage
 
 ```bash
@@ -84,6 +102,10 @@ configuration will be added with the context engine.
 - AI request preparation redacts credential assignments, known provider tokens,
   authorization tokens, credential-bearing URLs, and private-key bodies while
   preserving diff line structure.
+- Prompt batches enforce a configurable total, diff, and static-finding token
+  budget using a conservative provider-independent estimate.
+- Large diffs are grouped file-first and then split at hunk/line boundaries;
+  oversized lines carry an explicit truncation marker.
 - No AI provider is called in this milestone.
 
 ## Package Boundaries
@@ -93,6 +115,7 @@ configuration will be added with the context engine.
 - `internal/gitdiff` parses staged unified patches into files, hunks, and
   line-level changes.
 - `internal/pathfilter` applies privacy and generated-file exclusions.
+- `internal/prompt` creates language-independent, token-budgeted AI batches.
 - `internal/analyzer` hosts deterministic local analysis passes.
 - `internal/findings` defines the shared finding contract.
 - `internal/redact` removes secret material before any future provider request.
@@ -114,7 +137,8 @@ go test ./...
 go vet ./...
 ```
 
-The next milestone is a language-independent, token-budgeted prompt builder.
-It will split large diffs into reviewable groups and provide a diff-only
-fallback for every text-based codebase. Language-specific symbol parsers can
-later enrich that baseline without becoming a requirement for review.
+The next milestone is provider-independent AI orchestration with a mock
+provider: execute prepared batches, validate AI responses, merge them with
+local findings, deduplicate overlaps, and keep local review available when the
+provider fails. A real vendor integration can follow once that boundary is
+stable.
