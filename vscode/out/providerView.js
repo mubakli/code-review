@@ -48,7 +48,8 @@ class ProviderTreeProvider {
         autoReview: false,
         enabled: false,
         keyStored: false,
-        model: ""
+        model: "",
+        reviewing: false
     };
     onDidChangeTreeData = this.changedEmitter.event;
     update(state) {
@@ -63,13 +64,21 @@ class ProviderTreeProvider {
             return [item("AI review is off", "Choose OpenAI or DeepSeek", "circle-slash", exports.configureProviderCommand, "Choose AI Provider")];
         }
         const provider = this.state.provider;
-        return [
+        const items = [
             item(provider.label, "Selected provider", "sparkle", exports.configureProviderCommand, "Change AI Provider"),
             item(this.state.model || provider.defaultModel, "Model", "symbol-method", exports.selectModelCommand, "Change AI Model"),
             item((0, agents_1.reviewAgentSummary)(this.state.agents), "Review agents", "organization", exports.selectAgentsCommand, "Select AI Review Agents"),
             item(this.state.keyStored ? "API key stored" : "API key required", "SecretStorage", this.state.keyStored ? "key" : "warning", exports.manageAPIKeyCommand, "Manage API Key"),
             item(this.state.autoReview ? "Automatic review on" : "Automatic review off", "After staged changes", this.state.autoReview ? "sync" : "debug-pause", exports.configureProviderCommand, "Configure AI Review")
         ];
+        if (this.state.reviewing) {
+            const progress = new vscode.TreeItem("AI review in progress", vscode.TreeItemCollapsibleState.None);
+            progress.description = `${provider.label} · ${this.state.model || provider.defaultModel}`;
+            progress.iconPath = new vscode.ThemeIcon("sync~spin");
+            progress.tooltip = "Local findings are already available. AI specialists are reviewing the staged snapshot.";
+            items.unshift(progress);
+        }
+        return items;
     }
 }
 exports.ProviderTreeProvider = ProviderTreeProvider;

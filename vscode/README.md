@@ -36,6 +36,11 @@ and API-key rows for direct changes without repeating the full setup flow.
 Click the agents row or run **Code Review: Select AI Review Agents** to switch
 between Correctness, Security, or both without changing provider or model.
 
+During the AI phase, an animated status-bar item, an **AI review in progress**
+row in the AI Provider view, and a cancellable native progress notification stay
+visible. Local diagnostics are published before this progress starts, so
+cancelling AI review does not remove local findings.
+
 After AI review, the dedicated **Code Review** Activity Bar view lists only
 files that contain actual AI comments; it is separate from Source Control's full
 Git change list. Selecting a comment opens a side-by-side `HEAD ↔ Staged` diff

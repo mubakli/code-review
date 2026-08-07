@@ -16,6 +16,7 @@ export interface ProviderViewState {
   keyStored: boolean;
   model: string;
   provider?: ProviderDefinition;
+  reviewing: boolean;
 }
 
 export class ProviderTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
@@ -25,7 +26,8 @@ export class ProviderTreeProvider implements vscode.TreeDataProvider<vscode.Tree
     autoReview: false,
     enabled: false,
     keyStored: false,
-    model: ""
+    model: "",
+    reviewing: false
   };
 
   readonly onDidChangeTreeData = this.changedEmitter.event;
@@ -50,7 +52,7 @@ export class ProviderTreeProvider implements vscode.TreeDataProvider<vscode.Tree
       )];
     }
     const provider = this.state.provider;
-    return [
+    const items = [
       item(provider.label, "Selected provider", "sparkle", configureProviderCommand, "Change AI Provider"),
       item(this.state.model || provider.defaultModel, "Model", "symbol-method", selectModelCommand, "Change AI Model"),
       item(
@@ -75,6 +77,14 @@ export class ProviderTreeProvider implements vscode.TreeDataProvider<vscode.Tree
         "Configure AI Review"
       )
     ];
+    if (this.state.reviewing) {
+      const progress = new vscode.TreeItem("AI review in progress", vscode.TreeItemCollapsibleState.None);
+      progress.description = `${provider.label} · ${this.state.model || provider.defaultModel}`;
+      progress.iconPath = new vscode.ThemeIcon("sync~spin");
+      progress.tooltip = "Local findings are already available. AI specialists are reviewing the staged snapshot.";
+      items.unshift(progress);
+    }
+    return items;
   }
 }
 

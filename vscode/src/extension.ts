@@ -98,6 +98,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const output = vscode.window.createOutputChannel("Code Review", { log: true });
   const knownRepositories = new Set<string>();
   const interactiveRepositories = new Set<string>();
+  const reviewingRepositories = new Set<string>();
   let currentSession: ReviewSession | undefined;
   let paused = context.globalState.get<boolean>("autoReviewPaused", false);
 
@@ -112,7 +113,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const refreshProviderUI = async (): Promise<void> => {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (folder === undefined) {
-      providerTree.update({ agents: [], autoReview: false, enabled: false, keyStored: false, model: "" });
+      providerTree.update({ agents: [], autoReview: false, enabled: false, keyStored: false, model: "", reviewing: false });
       providerStatus.text = "$(circle-slash) AI: Off";
       providerStatus.tooltip = "Open a workspace to configure AI review";
       return;
@@ -131,17 +132,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       enabled,
       keyStored,
       model,
-      provider
+      provider,
+      reviewing: reviewingRepositories.size > 0
     });
     if (!enabled || provider === undefined) {
       providerStatus.text = "$(circle-slash) AI: Off";
       providerStatus.tooltip = "Click to choose an AI provider";
       return;
     }
-    providerStatus.text = `$(sparkle) AI: ${provider.label} · ${model || provider.defaultModel}`;
-    providerStatus.tooltip = keyStored
-      ? `${provider.label} is configured with ${reviewAgentSummary(agents)}. Click to change provider.`
-      : `${provider.label} API key is missing. Click to configure.`;
+    providerStatus.text = reviewingRepositories.size > 0
+      ? `$(sync~spin) AI: ${provider.label} · reviewing`
+      : `$(sparkle) AI: ${provider.label} · ${model || provider.defaultModel}`;
+    providerStatus.tooltip = reviewingRepositories.size > 0
+      ? `${provider.label} is reviewing the staged snapshot. Local findings are already available.`
+      : keyStored
+        ? `${provider.label} is configured with ${reviewAgentSummary(agents)}. Click to change provider.`
+        : `${provider.label} API key is missing. Click to configure.`;
   };
   await refreshProviderUI();
 
@@ -212,9 +218,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      setStatus(status, `Code Review [${provider.label}]: ${localCount} local · AI reviewing…`);
+      reviewingRepositories.add(repositoryRoot);
+      await refreshProviderUI();
+      setStatus(status, `$(sync~spin) Code Review [${provider.label}]: ${localCount} local · AI reviewing…`);
       try {
-        const aiResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, apiKey, signal);
+        const aiResult = await runAIReviewWithProgress(
+          repositoryRoot,
+          snapshot.reviewId,
+          configuration,
+          provider.label,
+          apiKey,
+          signal
+        );
+        if (aiResult === undefined) {
+          treeView.description = provider.label;
+          treeView.message = `${provider.label} review was cancelled. Local findings remain in Problems.`;
+          setFindingStatus(status, localCount, "Local");
+          return;
+        }
         await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
         const fixSession: SuggestedFixSession = {
           environment: buildReviewerEnvironment(process.env),
@@ -256,6 +277,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         treeView.description = provider.label;
         treeView.message = `${provider.label} is currently unavailable. Local findings remain in Problems.`;
         setStatus(status, `Code Review [${provider.label}]: ${localCount} issues · unavailable`);
+      } finally {
+        reviewingRepositories.delete(repositoryRoot);
+        await refreshProviderUI();
       }
     },
     (_repository, schedulerStatus) => updateSchedulerStatus(status, schedulerStatus, paused),
@@ -370,7 +394,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     const configuration = vscode.workspace.getConfiguration("codeReview", root);
-    if (configuration.get<boolean>("autoReview", true)) {
+    if (configuration.get<boolean>("autoReview", false)) {
       scheduler.notify(repositoryRoot, debounce(configuration.get<number>("debounceMs", 500)));
     }
   });
@@ -391,7 +415,7 @@ async function readConfiguration(context: vscode.ExtensionContext, repositoryRoo
     aiAutoReview: configuration.get<boolean>("ai.autoReview", true),
     agents: configuredReviewAgentIDs(configuration.get<string[]>("ai.agents", [])),
     aiEnabled: configuration.get<boolean>("ai.enabled", false),
-    autoReview: configuration.get<boolean>("autoReview", true),
+    autoReview: configuration.get<boolean>("autoReview", false),
     debounceMs: debounce(configuration.get<number>("debounceMs", 500)),
     excludes: configuration.get<string[]>("exclude", []),
     executable: reviewerExecutable(configuration.get<string>("binaryPath")?.trim(), repositoryRoot, context.extensionPath),
@@ -413,6 +437,48 @@ async function readSnapshot(repositoryRoot: string, executable: string, signal: 
     token,
     64 * 1024
   )));
+}
+
+async function runAIReviewWithProgress(
+  repositoryRoot: string,
+  reviewId: string,
+  configuration: ReviewConfiguration,
+  providerLabel: string,
+  apiKey: string,
+  schedulerSignal: AbortSignal
+): Promise<ReviewResult | undefined> {
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `${providerLabel} is reviewing staged changes`,
+      cancellable: true
+    },
+    async (progress, token) => {
+      progress.report({ message: `${reviewAgentSummary(configuration.agents)} · local findings are already available` });
+      const controller = new AbortController();
+      let cancelledByUser = false;
+      const cancelFromScheduler = (): void => controller.abort();
+      schedulerSignal.addEventListener("abort", cancelFromScheduler, { once: true });
+      const cancellation = token.onCancellationRequested(() => {
+        cancelledByUser = true;
+        controller.abort();
+      });
+      if (schedulerSignal.aborted) {
+        controller.abort();
+      }
+      try {
+        return await runReviewPhase(repositoryRoot, reviewId, configuration, apiKey, controller.signal);
+      } catch (error) {
+        if (cancelledByUser && !schedulerSignal.aborted && isCancellation(error, controller.signal)) {
+          return undefined;
+        }
+        throw error;
+      } finally {
+        cancellation.dispose();
+        schedulerSignal.removeEventListener("abort", cancelFromScheduler);
+      }
+    }
+  );
 }
 
 async function runReviewPhase(

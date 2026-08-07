@@ -136,6 +136,13 @@
       }
     ],
     "menus": {
+      "scm/title": [
+        {
+          "command": "code-review.reviewStaged",
+          "when": "scmProvider == git",
+          "group": "navigation"
+        }
+      ],
       "view/title": [
         {
           "command": "code-review.configureAIProvider",
@@ -210,7 +217,7 @@
         },
         "codeReview.autoReview": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "scope": "resource",
           "description": "Automatically review when the staged Git snapshot changes."
         },

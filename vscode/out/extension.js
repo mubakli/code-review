@@ -74,6 +74,7 @@ async function activate(context) {
     const output = vscode.window.createOutputChannel("Code Review", { log: true });
     const knownRepositories = new Set();
     const interactiveRepositories = new Set();
+    const reviewingRepositories = new Set();
     let currentSession;
     let paused = context.globalState.get("autoReviewPaused", false);
     status.name = "Code Review";
@@ -86,7 +87,7 @@ async function activate(context) {
     const refreshProviderUI = async () => {
         const folder = vscode.workspace.workspaceFolders?.[0];
         if (folder === undefined) {
-            providerTree.update({ agents: [], autoReview: false, enabled: false, keyStored: false, model: "" });
+            providerTree.update({ agents: [], autoReview: false, enabled: false, keyStored: false, model: "", reviewing: false });
             providerStatus.text = "$(circle-slash) AI: Off";
             providerStatus.tooltip = "Open a workspace to configure AI review";
             return;
@@ -105,17 +106,22 @@ async function activate(context) {
             enabled,
             keyStored,
             model,
-            provider
+            provider,
+            reviewing: reviewingRepositories.size > 0
         });
         if (!enabled || provider === undefined) {
             providerStatus.text = "$(circle-slash) AI: Off";
             providerStatus.tooltip = "Click to choose an AI provider";
             return;
         }
-        providerStatus.text = `$(sparkle) AI: ${provider.label} · ${model || provider.defaultModel}`;
-        providerStatus.tooltip = keyStored
-            ? `${provider.label} is configured with ${(0, agents_1.reviewAgentSummary)(agents)}. Click to change provider.`
-            : `${provider.label} API key is missing. Click to configure.`;
+        providerStatus.text = reviewingRepositories.size > 0
+            ? `$(sync~spin) AI: ${provider.label} · reviewing`
+            : `$(sparkle) AI: ${provider.label} · ${model || provider.defaultModel}`;
+        providerStatus.tooltip = reviewingRepositories.size > 0
+            ? `${provider.label} is reviewing the staged snapshot. Local findings are already available.`
+            : keyStored
+                ? `${provider.label} is configured with ${(0, agents_1.reviewAgentSummary)(agents)}. Click to change provider.`
+                : `${provider.label} API key is missing. Click to configure.`;
     };
     await refreshProviderUI();
     const scheduler = new autoReview_1.AutoReviewScheduler(500, async (repositoryRoot, signal) => {
@@ -179,9 +185,17 @@ async function activate(context) {
             setFindingStatus(status, localCount, "Local");
             return;
         }
-        setStatus(status, `Code Review [${provider.label}]: ${localCount} local · AI reviewing…`);
+        reviewingRepositories.add(repositoryRoot);
+        await refreshProviderUI();
+        setStatus(status, `$(sync~spin) Code Review [${provider.label}]: ${localCount} local · AI reviewing…`);
         try {
-            const aiResult = await runReviewPhase(repositoryRoot, snapshot.reviewId, configuration, apiKey, signal);
+            const aiResult = await runAIReviewWithProgress(repositoryRoot, snapshot.reviewId, configuration, provider.label, apiKey, signal);
+            if (aiResult === undefined) {
+                treeView.description = provider.label;
+                treeView.message = `${provider.label} review was cancelled. Local findings remain in Problems.`;
+                setFindingStatus(status, localCount, "Local");
+                return;
+            }
             await requireCurrentSnapshot(repositoryRoot, configuration.executable, snapshot.reviewId, signal);
             const fixSession = {
                 environment: (0, environment_1.buildReviewerEnvironment)(process.env),
@@ -224,6 +238,10 @@ async function activate(context) {
             treeView.description = provider.label;
             treeView.message = `${provider.label} is currently unavailable. Local findings remain in Problems.`;
             setStatus(status, `Code Review [${provider.label}]: ${localCount} issues · unavailable`);
+        }
+        finally {
+            reviewingRepositories.delete(repositoryRoot);
+            await refreshProviderUI();
         }
     }, (_repository, schedulerStatus) => updateSchedulerStatus(status, schedulerStatus, paused), (repository, error) => output.error(`Automatic review failed for ${repository}: ${displayError(error)}`));
     context.subscriptions.push(diagnostics, commentPresenter, fixController, providerView, providerStatus, output, scheduler, treeView, status, vscode.workspace.registerTextDocumentContentProvider(reviewView_1.baseContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(reviewView_1.indexContentScheme, stagedContent), vscode.workspace.registerTextDocumentContentProvider(fixController_1.fixContentScheme, fixController), vscode.languages.registerCodeActionsProvider({ scheme: "file" }, fixController, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }), vscode.commands.registerCommand(fixController_1.previewSuggestedFixCommand, value => fixController.preview(value)), vscode.commands.registerCommand(fixController_1.applySuggestedFixCommand, value => fixController.apply(value)), vscode.commands.registerCommand(providerView_1.configureProviderCommand, async () => {
@@ -303,7 +321,7 @@ async function activate(context) {
             return;
         }
         const configuration = vscode.workspace.getConfiguration("codeReview", root);
-        if (configuration.get("autoReview", true)) {
+        if (configuration.get("autoReview", false)) {
             scheduler.notify(repositoryRoot, debounce(configuration.get("debounceMs", 500)));
         }
     });
@@ -322,7 +340,7 @@ async function readConfiguration(context, repositoryRoot) {
         aiAutoReview: configuration.get("ai.autoReview", true),
         agents: (0, agents_1.configuredReviewAgentIDs)(configuration.get("ai.agents", [])),
         aiEnabled: configuration.get("ai.enabled", false),
-        autoReview: configuration.get("autoReview", true),
+        autoReview: configuration.get("autoReview", false),
         debounceMs: debounce(configuration.get("debounceMs", 500)),
         excludes: configuration.get("exclude", []),
         executable: reviewerExecutable(configuration.get("binaryPath")?.trim(), repositoryRoot, context.extensionPath),
@@ -335,6 +353,39 @@ function debounce(value) {
 }
 async function readSnapshot(repositoryRoot, executable, signal) {
     return withCancellation(signal, async (token) => (0, protocol_1.parseSnapshotResult)(await runProcess(executable, ["snapshot", "--staged", "--repo", repositoryRoot], repositoryRoot, (0, environment_1.buildReviewerEnvironment)(process.env), token, 64 * 1024)));
+}
+async function runAIReviewWithProgress(repositoryRoot, reviewId, configuration, providerLabel, apiKey, schedulerSignal) {
+    return vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `${providerLabel} is reviewing staged changes`,
+        cancellable: true
+    }, async (progress, token) => {
+        progress.report({ message: `${(0, agents_1.reviewAgentSummary)(configuration.agents)} · local findings are already available` });
+        const controller = new AbortController();
+        let cancelledByUser = false;
+        const cancelFromScheduler = () => controller.abort();
+        schedulerSignal.addEventListener("abort", cancelFromScheduler, { once: true });
+        const cancellation = token.onCancellationRequested(() => {
+            cancelledByUser = true;
+            controller.abort();
+        });
+        if (schedulerSignal.aborted) {
+            controller.abort();
+        }
+        try {
+            return await runReviewPhase(repositoryRoot, reviewId, configuration, apiKey, controller.signal);
+        }
+        catch (error) {
+            if (cancelledByUser && !schedulerSignal.aborted && isCancellation(error, controller.signal)) {
+                return undefined;
+            }
+            throw error;
+        }
+        finally {
+            cancellation.dispose();
+            schedulerSignal.removeEventListener("abort", cancelFromScheduler);
+        }
+    });
 }
 async function runReviewPhase(repositoryRoot, reviewId, configuration, apiKey, signal) {
     const args = [
