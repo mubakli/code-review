@@ -1,4 +1,4 @@
-package gitdiff
+package git
 
 import (
 	"bufio"
@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"code-review/internal/change"
 )
 
 const maxDiffLineBytes = 16 << 20
@@ -15,8 +17,8 @@ var hunkHeaderPattern = regexp.MustCompile(`^@@ -([0-9]+)(,([0-9]+))? \+([0-9]+)
 
 // Parse converts the unified patch emitted by Git into line-addressable
 // changes. It rejects malformed hunk ranges rather than returning partial data.
-func Parse(patch []byte) (ChangeSet, error) {
-	parser := diffParser{changes: ChangeSet{Files: make([]FileChange, 0)}}
+func Parse(patch []byte) (change.ChangeSet, error) {
+	parser := diffParser{changes: change.ChangeSet{Files: make([]change.FileChange, 0)}}
 	scanner := bufio.NewScanner(bytes.NewReader(patch))
 	scanner.Buffer(make([]byte, 64*1024), maxDiffLineBytes)
 	scanner.Split(splitDiffLines)
@@ -25,14 +27,14 @@ func Parse(patch []byte) (ChangeSet, error) {
 	for scanner.Scan() {
 		lineNumber++
 		if err := parser.consume(scanner.Text()); err != nil {
-			return ChangeSet{}, fmt.Errorf("parse diff line %d: %w", lineNumber, err)
+			return change.ChangeSet{}, fmt.Errorf("parse diff line %d: %w", lineNumber, err)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return ChangeSet{}, fmt.Errorf("read diff: %w", err)
+		return change.ChangeSet{}, fmt.Errorf("read diff: %w", err)
 	}
 	if err := parser.finishFile(); err != nil {
-		return ChangeSet{}, fmt.Errorf("finish diff: %w", err)
+		return change.ChangeSet{}, fmt.Errorf("finish diff: %w", err)
 	}
 	return parser.changes, nil
 }
@@ -50,9 +52,9 @@ func splitDiffLines(data []byte, atEOF bool) (advance int, token []byte, err err
 }
 
 type diffParser struct {
-	changes ChangeSet
-	file    *FileChange
-	hunk    *Hunk
+	changes change.ChangeSet
+	file    *change.FileChange
+	hunk    *change.Hunk
 	oldLine int
 	newLine int
 	seenOld int
@@ -68,11 +70,11 @@ func (p *diffParser) consume(line string) error {
 		if err != nil {
 			return err
 		}
-		p.file = &FileChange{
+		p.file = &change.FileChange{
 			OldPath: oldPath,
 			NewPath: newPath,
-			Status:  StatusModified,
-			Hunks:   make([]Hunk, 0),
+			Status:  change.StatusModified,
+			Hunks:   make([]change.Hunk, 0),
 		}
 		return nil
 	}
@@ -95,37 +97,37 @@ func (p *diffParser) consume(line string) error {
 
 	switch {
 	case strings.HasPrefix(line, "new file mode "):
-		p.file.Status = StatusAdded
+		p.file.Status = change.StatusAdded
 	case strings.HasPrefix(line, "deleted file mode "):
-		p.file.Status = StatusDeleted
+		p.file.Status = change.StatusDeleted
 	case strings.HasPrefix(line, "rename from "):
 		path, err := decodeGitPath(strings.TrimPrefix(line, "rename from "))
 		if err != nil {
 			return fmt.Errorf("decode rename source: %w", err)
 		}
 		p.file.OldPath = path
-		p.file.Status = StatusRenamed
+		p.file.Status = change.StatusRenamed
 	case strings.HasPrefix(line, "rename to "):
 		path, err := decodeGitPath(strings.TrimPrefix(line, "rename to "))
 		if err != nil {
 			return fmt.Errorf("decode rename destination: %w", err)
 		}
 		p.file.NewPath = path
-		p.file.Status = StatusRenamed
+		p.file.Status = change.StatusRenamed
 	case strings.HasPrefix(line, "copy from "):
 		path, err := decodeGitPath(strings.TrimPrefix(line, "copy from "))
 		if err != nil {
 			return fmt.Errorf("decode copy source: %w", err)
 		}
 		p.file.OldPath = path
-		p.file.Status = StatusCopied
+		p.file.Status = change.StatusCopied
 	case strings.HasPrefix(line, "copy to "):
 		path, err := decodeGitPath(strings.TrimPrefix(line, "copy to "))
 		if err != nil {
 			return fmt.Errorf("decode copy destination: %w", err)
 		}
 		p.file.NewPath = path
-		p.file.Status = StatusCopied
+		p.file.Status = change.StatusCopied
 	case strings.HasPrefix(line, "--- "):
 		path, err := parsePatchPath(strings.TrimPrefix(line, "--- "), "a/")
 		if err != nil {
@@ -133,7 +135,7 @@ func (p *diffParser) consume(line string) error {
 		}
 		p.file.OldPath = path
 		if path == "" {
-			p.file.Status = StatusAdded
+			p.file.Status = change.StatusAdded
 		}
 	case strings.HasPrefix(line, "+++ "):
 		path, err := parsePatchPath(strings.TrimPrefix(line, "+++ "), "b/")
@@ -142,7 +144,7 @@ func (p *diffParser) consume(line string) error {
 		}
 		p.file.NewPath = path
 		if path == "" {
-			p.file.Status = StatusDeleted
+			p.file.Status = change.StatusDeleted
 		}
 	case strings.HasPrefix(line, "Binary files "), line == "GIT binary patch":
 		p.file.Binary = true
@@ -173,13 +175,13 @@ func (p *diffParser) startHunk(header string) error {
 		return fmt.Errorf("parse new hunk count: %w", err)
 	}
 
-	p.hunk = &Hunk{
+	p.hunk = &change.Hunk{
 		OldStart: oldStart,
 		OldLines: oldLines,
 		NewStart: newStart,
 		NewLines: newLines,
 		Section:  matches[7],
-		Lines:    make([]Line, 0),
+		Lines:    make([]change.Line, 0),
 	}
 	p.oldLine = oldStart
 	p.newLine = newStart
@@ -203,10 +205,10 @@ func (p *diffParser) consumeHunkLine(line string) error {
 		return fmt.Errorf("hunk line has no change marker")
 	}
 
-	diffLine := Line{Content: line[1:]}
+	diffLine := change.Line{Content: line[1:]}
 	switch line[0] {
 	case ' ':
-		diffLine.Kind = LineContext
+		diffLine.Kind = change.LineContext
 		diffLine.OldLine = p.oldLine
 		diffLine.NewLine = p.newLine
 		p.oldLine++
@@ -214,12 +216,12 @@ func (p *diffParser) consumeHunkLine(line string) error {
 		p.seenOld++
 		p.seenNew++
 	case '+':
-		diffLine.Kind = LineAdded
+		diffLine.Kind = change.LineAdded
 		diffLine.NewLine = p.newLine
 		p.newLine++
 		p.seenNew++
 	case '-':
-		diffLine.Kind = LineDeleted
+		diffLine.Kind = change.LineDeleted
 		diffLine.OldLine = p.oldLine
 		p.oldLine++
 		p.seenOld++
@@ -260,13 +262,13 @@ func (p *diffParser) finishFile() error {
 	}
 
 	switch p.file.Status {
-	case StatusAdded:
+	case change.StatusAdded:
 		p.file.OldPath = ""
-	case StatusDeleted:
+	case change.StatusDeleted:
 		p.file.NewPath = ""
-	case StatusModified:
+	case change.StatusModified:
 		if p.file.OldPath != "" && p.file.NewPath != "" && p.file.OldPath != p.file.NewPath {
-			p.file.Status = StatusRenamed
+			p.file.Status = change.StatusRenamed
 		}
 	}
 	if p.file.Path() == "" {

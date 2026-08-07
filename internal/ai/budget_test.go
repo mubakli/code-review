@@ -1,4 +1,4 @@
-package prompt
+package ai
 
 import "testing"
 
@@ -33,7 +33,7 @@ func TestBudgetValidation(t *testing.T) {
 		{MaxInputTokens: instructionTokens + 40, MaxDiffTokens: 20, MaxStaticFindingTokens: 0},
 	}
 	for _, budget := range tests {
-		if _, err := New(budget, pathMatcherForTest()); err == nil {
+		if _, err := New(budget); err == nil {
 			t.Errorf("New(%+v) error = nil", budget)
 		}
 	}

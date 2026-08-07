@@ -1,4 +1,4 @@
-package prompt
+package ai
 
 import (
 	"context"
@@ -8,10 +8,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"code-review/internal/change"
 	"code-review/internal/findings"
-	"code-review/internal/gitdiff"
-	"code-review/internal/llm"
-	"code-review/internal/pathfilter"
 	"code-review/internal/redact"
 )
 
@@ -23,7 +21,7 @@ const (
 )
 
 type Batch struct {
-	Request         llm.AnalysisRequest
+	Request         AnalysisRequest
 	Files           []string
 	EstimatedTokens int
 	DiffTokens      int
@@ -34,12 +32,11 @@ type Batch struct {
 
 type Builder struct {
 	budget          Budget
-	matcher         pathfilter.Matcher
 	diffTokenLimit  int
 	instructionCost int
 }
 
-func New(budget Budget, matcher pathfilter.Matcher) (Builder, error) {
+func New(budget Budget) (Builder, error) {
 	instructionCost := EstimateTokens(ReviewInstructions)
 	diffLimit, err := budget.diffLimit(instructionCost)
 	if err != nil {
@@ -47,27 +44,15 @@ func New(budget Budget, matcher pathfilter.Matcher) (Builder, error) {
 	}
 	return Builder{
 		budget:          budget,
-		matcher:         matcher,
 		diffTokenLimit:  diffLimit,
 		instructionCost: instructionCost,
 	}, nil
 }
 
-func NewDefault(extraExcludes ...string) (Builder, error) {
-	patterns := pathfilter.DefaultPatterns()
-	for _, pattern := range extraExcludes {
-		if err := pathfilter.ValidatePattern(pattern); err != nil {
-			return Builder{}, err
-		}
-		patterns = append(patterns, pattern)
-	}
-	return New(DefaultBudget(), pathfilter.New(patterns))
-}
-
-// Build creates language-independent, file-first review batches. Unsupported
-// languages use this diff-only path; future symbol parsers can add context
-// without replacing it.
-func (b Builder) Build(ctx context.Context, changes gitdiff.ChangeSet, staticFindings []findings.Finding) ([]Batch, error) {
+// Build creates language-independent, file-first review batches from an
+// already scoped change set. Unsupported languages use this diff-only path;
+// future symbol parsers can add context without replacing it.
+func (b Builder) Build(ctx context.Context, changes change.ChangeSet, staticFindings []findings.Finding) ([]Batch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -83,7 +68,7 @@ func (b Builder) Build(ctx context.Context, changes gitdiff.ChangeSet, staticFin
 			return nil, err
 		}
 		path := file.Path()
-		if path == "" || file.Binary || b.matcher.Excludes(path) {
+		if path == "" || file.Binary {
 			continue
 		}
 		fileFragments, err := splitFile(ctx, file, b.diffTokenLimit)
@@ -145,7 +130,11 @@ func (b Builder) makeBatch(diff string, fragments []fragment, staticFindings []f
 	}
 
 	selected, omitted := selectFindings(staticFindings, fileSet, b.budget.MaxStaticFindingTokens)
-	request := llm.NewAnalysisRequest(ReviewInstructions, diff, selected)
+	redactionCount := 0
+	for _, value := range fragments {
+		redactionCount += value.redactionCount
+	}
+	request := newAnalysisRequest(ReviewInstructions, diff, selected, redactionCount)
 	diffTokens := EstimateTokens(request.Diff())
 	estimated := b.instructionCost + diffTokens + estimateFindings(selected)
 	return Batch{
@@ -153,24 +142,27 @@ func (b Builder) makeBatch(diff string, fragments []fragment, staticFindings []f
 		Files:           files,
 		EstimatedTokens: estimated,
 		DiffTokens:      diffTokens,
-		RedactionCount:  strings.Count(request.Diff(), redact.Placeholder),
+		RedactionCount:  request.RedactionCount(),
 		Truncated:       truncated,
 		OmittedFindings: omitted,
 	}
 }
 
 type fragment struct {
-	file      string
-	text      string
-	truncated bool
+	file           string
+	text           string
+	truncated      bool
+	redactionCount int
 }
 
-func splitFile(ctx context.Context, file gitdiff.FileChange, tokenLimit int) ([]fragment, error) {
-	header := redact.Secrets(renderFileHeader(file)).Text
-	body := redact.Secrets(renderFileBody(file)).Text
+func splitFile(ctx context.Context, file change.FileChange, tokenLimit int) ([]fragment, error) {
+	headerResult := redact.Secrets(renderFileHeader(file))
+	bodyResult := redact.Secrets(renderFileBody(file))
+	header := headerResult.Text
+	body := bodyResult.Text
 	full := header + body
 	if EstimateTokens(full) <= tokenLimit {
-		return []fragment{{file: file.Path(), text: full}}, nil
+		return []fragment{{file: file.Path(), text: full, redactionCount: headerResult.Count + bodyResult.Count}}, nil
 	}
 	if EstimateTokens(header+partialHunkMarker) >= tokenLimit {
 		return nil, fmt.Errorf("file header leaves no room for diff content")
@@ -194,7 +186,7 @@ func splitFile(ctx context.Context, file gitdiff.FileChange, tokenLimit int) ([]
 		}
 
 		if EstimateTokens(current+line) > tokenLimit && hasBody {
-			result = append(result, fragment{file: file.Path(), text: current, truncated: truncated})
+			result = append(result, fragment{file: file.Path(), text: current, truncated: truncated, redactionCount: strings.Count(current, redact.Placeholder)})
 			current = header + partialHunkMarker
 			if lastHunkHeader != "" && !isHunkHeader {
 				current += lastHunkHeader
@@ -217,12 +209,12 @@ func splitFile(ctx context.Context, file gitdiff.FileChange, tokenLimit int) ([]
 		}
 	}
 	if hasBody || len(result) == 0 {
-		result = append(result, fragment{file: file.Path(), text: current, truncated: truncated})
+		result = append(result, fragment{file: file.Path(), text: current, truncated: truncated, redactionCount: strings.Count(current, redact.Placeholder)})
 	}
 	return result, nil
 }
 
-func renderFileHeader(file gitdiff.FileChange) string {
+func renderFileHeader(file change.FileChange) string {
 	oldPath := "/dev/null"
 	if file.OldPath != "" {
 		oldPath = formatDiffPath("a/", file.OldPath)
@@ -241,7 +233,7 @@ func renderFileHeader(file gitdiff.FileChange) string {
 	)
 }
 
-func renderFileBody(file gitdiff.FileChange) string {
+func renderFileBody(file change.FileChange) string {
 	var output strings.Builder
 	for _, hunk := range file.Hunks {
 		fmt.Fprintf(
@@ -259,9 +251,9 @@ func renderFileBody(file gitdiff.FileChange) string {
 		output.WriteString("\n")
 		for _, line := range hunk.Lines {
 			switch line.Kind {
-			case gitdiff.LineAdded:
+			case change.LineAdded:
 				output.WriteByte('+')
-			case gitdiff.LineDeleted:
+			case change.LineDeleted:
 				output.WriteByte('-')
 			default:
 				output.WriteByte(' ')

@@ -1,8 +1,10 @@
-package gitdiff
+package git
 
 import (
 	"strings"
 	"testing"
+
+	"code-review/internal/change"
 )
 
 func TestParseFilesAndHunks(t *testing.T) {
@@ -46,24 +48,24 @@ func TestParseFilesAndHunks(t *testing.T) {
 	}
 
 	modified := changes.Files[0]
-	if modified.Path() != "service.go" || modified.Status != StatusModified {
+	if modified.Path() != "service.go" || modified.Status != change.StatusModified {
 		t.Fatalf("modified file = %#v", modified)
 	}
 	if len(modified.Hunks) != 1 || len(modified.Hunks[0].Lines) != 5 {
 		t.Fatalf("modified hunks = %#v", modified.Hunks)
 	}
 	added := modified.Hunks[0].Lines[3]
-	if added.Kind != LineAdded || added.NewLine != 12 || added.Content != "audit()" {
+	if added.Kind != change.LineAdded || added.NewLine != 12 || added.Content != "audit()" {
 		t.Fatalf("added line = %#v", added)
 	}
 
-	if file := changes.Files[1]; file.Path() != "config file.go" || file.OldPath != "" || file.Status != StatusAdded {
+	if file := changes.Files[1]; file.Path() != "config file.go" || file.OldPath != "" || file.Status != change.StatusAdded {
 		t.Errorf("added file = %#v", file)
 	}
-	if file := changes.Files[2]; file.Path() != "old.go" || file.NewPath != "" || file.Status != StatusDeleted {
+	if file := changes.Files[2]; file.Path() != "old.go" || file.NewPath != "" || file.Status != change.StatusDeleted {
 		t.Errorf("deleted file = %#v", file)
 	}
-	if file := changes.Files[3]; file.Path() != "logo.png" || file.OldPath != "" || file.Status != StatusAdded || !file.Binary {
+	if file := changes.Files[3]; file.Path() != "logo.png" || file.OldPath != "" || file.Status != change.StatusAdded || !file.Binary {
 		t.Errorf("binary file = %#v", file)
 	}
 }
@@ -95,10 +97,10 @@ func TestParseRenameCopyAndQuotedPaths(t *testing.T) {
 	if got := changes.Files[0].Path(); got != "café.go" {
 		t.Errorf("quoted Path() = %q, want café.go", got)
 	}
-	if file := changes.Files[1]; file.Status != StatusRenamed || file.OldPath != "old name.go" || file.NewPath != "new name.go" {
+	if file := changes.Files[1]; file.Status != change.StatusRenamed || file.OldPath != "old name.go" || file.NewPath != "new name.go" {
 		t.Errorf("renamed file = %#v", file)
 	}
-	if file := changes.Files[2]; file.Status != StatusCopied || file.OldPath != "source.go" || file.NewPath != "copy.go" {
+	if file := changes.Files[2]; file.Status != change.StatusCopied || file.OldPath != "source.go" || file.NewPath != "copy.go" {
 		t.Errorf("copied file = %#v", file)
 	}
 }

@@ -1,12 +1,12 @@
-package analyzer
+package secrets
 
 import (
 	"context"
 	"regexp"
 	"strings"
 
+	"code-review/internal/change"
 	"code-review/internal/findings"
-	"code-review/internal/gitdiff"
 )
 
 var (
@@ -24,13 +24,13 @@ type secretMatch struct {
 
 // SecretAnalyzer conservatively checks added lines for credential material. It
 // reports locations only and never copies a matched value into a finding.
-type SecretAnalyzer struct{}
+type Analyzer struct{}
 
-func (SecretAnalyzer) Name() string {
+func (Analyzer) Name() string {
 	return "secrets"
 }
 
-func (SecretAnalyzer) Analyze(ctx context.Context, changes gitdiff.ChangeSet) ([]findings.Finding, error) {
+func (Analyzer) Analyze(ctx context.Context, changes change.ChangeSet) ([]findings.Finding, error) {
 	result := make([]findings.Finding, 0)
 	for _, file := range changes.Files {
 		if file.Binary {
@@ -41,7 +41,7 @@ func (SecretAnalyzer) Analyze(ctx context.Context, changes gitdiff.ChangeSet) ([
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if line.Kind != gitdiff.LineAdded {
+				if line.Kind != change.LineAdded {
 					continue
 				}
 				match, detected := detectSecret(line.Content)

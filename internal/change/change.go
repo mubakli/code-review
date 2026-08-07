@@ -1,4 +1,4 @@
-package gitdiff
+package change
 
 // ChangeStatus describes how a staged file differs from HEAD.
 type ChangeStatus string

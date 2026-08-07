@@ -33,8 +33,8 @@ value is never copied into output.
 
 Code intended for a future AI provider passes through a separate,
 language-agnostic redaction boundary. Provider requests cannot directly set raw
-diff content; `llm.NewAnalysisRequest` redacts it locally before exposing it to
-a provider implementation.
+diff content; `ai.Builder` redacts it locally before exposing a request to a
+provider implementation.
 
 The provider preparation path is also language-independent:
 
@@ -110,23 +110,24 @@ configuration will be added with the context engine.
 
 ## Package Boundaries
 
+- `internal/change` defines the provider- and VCS-neutral changed-code model.
 - `internal/git` invokes Git directly with `exec.CommandContext`; it never
-  constructs a shell command.
-- `internal/gitdiff` parses staged unified patches into files, hunks, and
-  line-level changes.
+  constructs a shell command, and parses staged patches into `change` values.
 - `internal/pathfilter` applies privacy and generated-file exclusions.
-- `internal/prompt` creates language-independent, token-budgeted AI batches.
-- `internal/analyzer` hosts deterministic local analysis passes.
+- `internal/review` owns the local-review use case and the small analyzer port.
+- `internal/analyzers/secrets` is a concrete deterministic analyzer.
 - `internal/findings` defines the shared finding contract.
 - `internal/redact` removes secret material before any future provider request.
-- `internal/review` orchestrates filtering and analyzers without depending on
-  VS Code.
-- `internal/llm` defines the vendor-neutral provider boundary. It has no
-  implementation yet.
+- `internal/ai` owns safe requests, token budgeting, batching, and the
+  vendor-neutral provider boundary. It has no provider implementation yet.
 - `internal/output` renders stable JSON or terminal output.
+- `cmd/reviewer` is the composition root that selects concrete adapters.
 
 This separation keeps the future TypeScript extension limited to process
 management, settings, secret storage, and VS Code diagnostics.
+
+See [`docs/architecture.md`](docs/architecture.md) for dependency rules,
+extension points, and the planned growth structure.
 
 ## Development
 

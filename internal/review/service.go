@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"code-review/internal/analyzer"
+	"code-review/internal/change"
 	"code-review/internal/findings"
-	gitrepository "code-review/internal/git"
-	"code-review/internal/gitdiff"
 	"code-review/internal/pathfilter"
 )
 
@@ -33,41 +31,25 @@ type Result struct {
 
 type Service struct {
 	matcher   pathfilter.Matcher
-	analyzers []analyzer.Analyzer
+	analyzers []Analyzer
 }
 
-func New(matcher pathfilter.Matcher, analyzers ...analyzer.Analyzer) *Service {
+// Analyzer is the extension point for deterministic local analysis. The
+// consumer owns this interface so implementations depend inward on review data.
+type Analyzer interface {
+	Name() string
+	Analyze(context.Context, change.ChangeSet) ([]findings.Finding, error)
+}
+
+func New(matcher pathfilter.Matcher, analyzers ...Analyzer) *Service {
 	return &Service{
 		matcher:   matcher,
-		analyzers: append([]analyzer.Analyzer(nil), analyzers...),
+		analyzers: append([]Analyzer(nil), analyzers...),
 	}
-}
-
-func NewDefault(extraExcludes ...string) *Service {
-	patterns := pathfilter.DefaultPatterns()
-	patterns = append(patterns, extraExcludes...)
-	return New(pathfilter.New(patterns), analyzer.SecretAnalyzer{})
-}
-
-// ReviewStaged reads and analyzes only the repository's staged patch.
-func (s *Service) ReviewStaged(ctx context.Context, directory string) (Result, error) {
-	repository, err := gitrepository.Open(ctx, directory)
-	if err != nil {
-		return Result{}, err
-	}
-	patch, err := repository.StagedDiff(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	changes, err := gitdiff.Parse(patch)
-	if err != nil {
-		return Result{}, fmt.Errorf("parse staged diff: %w", err)
-	}
-	return s.ReviewChanges(ctx, changes)
 }
 
 // ReviewChanges runs local analysis over an already parsed change set.
-func (s *Service) ReviewChanges(ctx context.Context, changes gitdiff.ChangeSet) (Result, error) {
+func (s *Service) ReviewChanges(ctx context.Context, changes change.ChangeSet) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -79,7 +61,7 @@ func (s *Service) ReviewChanges(ctx context.Context, changes gitdiff.ChangeSet) 
 		Findings: make([]findings.Finding, 0),
 	}
 
-	filtered := gitdiff.ChangeSet{Files: make([]gitdiff.FileChange, 0, len(changes.Files))}
+	filtered := change.ChangeSet{Files: make([]change.FileChange, 0, len(changes.Files))}
 	reviewedPaths := make(map[string]struct{}, len(changes.Files))
 	for _, file := range changes.Files {
 		if err := ctx.Err(); err != nil {
@@ -98,9 +80,9 @@ func (s *Service) ReviewChanges(ctx context.Context, changes gitdiff.ChangeSet) 
 		for _, hunk := range file.Hunks {
 			for _, line := range hunk.Lines {
 				switch line.Kind {
-				case gitdiff.LineAdded:
+				case change.LineAdded:
 					result.Summary.AddedLines++
-				case gitdiff.LineDeleted:
+				case change.LineDeleted:
 					result.Summary.DeletedLines++
 				}
 			}

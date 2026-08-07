@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"code-review/internal/change"
 )
 
 const (
@@ -66,8 +68,20 @@ func (r *Repository) Root() string {
 	return r.root
 }
 
-// StagedDiff returns a deterministic, text-only unified diff of the index.
-func (r *Repository) StagedDiff(ctx context.Context) ([]byte, error) {
+// StagedChanges returns parsed changes from the Git index.
+func (r *Repository) StagedChanges(ctx context.Context) (change.ChangeSet, error) {
+	patch, err := r.stagedDiff(ctx)
+	if err != nil {
+		return change.ChangeSet{}, err
+	}
+	changes, err := Parse(patch)
+	if err != nil {
+		return change.ChangeSet{}, fmt.Errorf("parse staged diff: %w", err)
+	}
+	return changes, nil
+}
+
+func (r *Repository) stagedDiff(ctx context.Context) ([]byte, error) {
 	patch, stderr, err := run(
 		ctx,
 		r.root,

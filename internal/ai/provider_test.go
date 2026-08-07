@@ -1,4 +1,4 @@
-package llm
+package ai
 
 import (
 	"encoding/json"
@@ -9,12 +9,12 @@ import (
 	"code-review/internal/redact"
 )
 
-func TestNewAnalysisRequestRedactsAndCopiesInput(t *testing.T) {
+func TestAnalysisRequestRedactsAndCopiesInput(t *testing.T) {
 	t.Parallel()
 
 	secret := "actual-secret-value"
 	staticFindings := []findings.Finding{{Title: "local finding"}}
-	request := NewAnalysisRequest("Review this diff.", `password = "`+secret+`"`, staticFindings)
+	request := newAnalysisRequest("Review this diff.", `password = "`+secret+`"`, staticFindings, 0)
 	staticFindings[0].Title = "mutated"
 
 	if strings.Contains(request.Diff(), secret) || !strings.Contains(request.Diff(), redact.Placeholder) {
@@ -41,7 +41,7 @@ func TestAnalysisRequestJSONNeverContainsRawSecret(t *testing.T) {
 	t.Parallel()
 
 	secret := "provider-secret-value"
-	request := NewAnalysisRequest("Review this diff.", `api_key: "`+secret+`"`, nil)
+	request := newAnalysisRequest("Review this diff.", `api_key: "`+secret+`"`, nil, 0)
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)

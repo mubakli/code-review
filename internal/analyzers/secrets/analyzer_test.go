@@ -1,4 +1,4 @@
-package analyzer
+package secrets
 
 import (
 	"context"
@@ -6,29 +6,29 @@ import (
 	"strings"
 	"testing"
 
+	"code-review/internal/change"
 	"code-review/internal/findings"
-	"code-review/internal/gitdiff"
 )
 
 func TestSecretAnalyzerChecksOnlyAddedLinesWithoutLeakingValues(t *testing.T) {
 	t.Parallel()
 
 	providerCredential := "AKIA" + strings.Repeat("A", 16)
-	changes := gitdiff.ChangeSet{Files: []gitdiff.FileChange{{
+	changes := change.ChangeSet{Files: []change.FileChange{{
 		NewPath: "config.go",
-		Status:  gitdiff.StatusModified,
-		Hunks: []gitdiff.Hunk{{Lines: []gitdiff.Line{
-			{Kind: gitdiff.LineAdded, NewLine: 4, Content: `const apiKey = "` + providerCredential + `"`},
-			{Kind: gitdiff.LineAdded, NewLine: 5, Content: `password: "correct-horse-battery"`},
-			{Kind: gitdiff.LineAdded, NewLine: 6, Content: `"client_secret": "json-secret-value-123"`},
-			{Kind: gitdiff.LineAdded, NewLine: 7, Content: `const token = os.Getenv("TOKEN")`},
-			{Kind: gitdiff.LineAdded, NewLine: 8, Content: `secret: "example-placeholder"`},
-			{Kind: gitdiff.LineDeleted, OldLine: 8, Content: `password: "deleted-secret"`},
-			{Kind: gitdiff.LineContext, OldLine: 9, NewLine: 9, Content: `password: "existing-secret"`},
+		Status:  change.StatusModified,
+		Hunks: []change.Hunk{{Lines: []change.Line{
+			{Kind: change.LineAdded, NewLine: 4, Content: `const apiKey = "` + providerCredential + `"`},
+			{Kind: change.LineAdded, NewLine: 5, Content: `password: "correct-horse-battery"`},
+			{Kind: change.LineAdded, NewLine: 6, Content: `"client_secret": "json-secret-value-123"`},
+			{Kind: change.LineAdded, NewLine: 7, Content: `const token = os.Getenv("TOKEN")`},
+			{Kind: change.LineAdded, NewLine: 8, Content: `secret: "example-placeholder"`},
+			{Kind: change.LineDeleted, OldLine: 8, Content: `password: "deleted-secret"`},
+			{Kind: change.LineContext, OldLine: 9, NewLine: 9, Content: `password: "existing-secret"`},
 		}}},
 	}}}
 
-	values, err := (SecretAnalyzer{}).Analyze(context.Background(), changes)
+	values, err := (Analyzer{}).Analyze(context.Background(), changes)
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -84,9 +84,9 @@ func TestSecretAnalyzerHonorsCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := (SecretAnalyzer{}).Analyze(ctx, gitdiff.ChangeSet{Files: []gitdiff.FileChange{{
+	_, err := (Analyzer{}).Analyze(ctx, change.ChangeSet{Files: []change.FileChange{{
 		NewPath: "config.go",
-		Hunks:   []gitdiff.Hunk{{Lines: []gitdiff.Line{{Kind: gitdiff.LineAdded, NewLine: 1, Content: `password = "real-secret"`}}}},
+		Hunks:   []change.Hunk{{Lines: []change.Line{{Kind: change.LineAdded, NewLine: 1, Content: `password = "real-secret"`}}}},
 	}}})
 	if err != context.Canceled {
 		t.Fatalf("Analyze() error = %v, want context.Canceled", err)

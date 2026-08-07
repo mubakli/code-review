@@ -1,4 +1,4 @@
-package llm
+package ai
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 )
 
 // Provider is the vendor-neutral boundary for future AI review integrations.
-// AnalysisRequest can only be populated through NewAnalysisRequest, which
-// applies local secret redaction before a provider can observe code.
+// AnalysisRequest fields are private and requests are created by Builder after
+// local secret redaction, before a provider can observe code.
 type Provider interface {
 	Analyze(ctx context.Context, request AnalysisRequest) (*AnalysisResponse, error)
 }
@@ -22,13 +22,13 @@ type AnalysisRequest struct {
 	redactionCount int
 }
 
-func NewAnalysisRequest(instructions, rawDiff string, staticFindings []findings.Finding) AnalysisRequest {
+func newAnalysisRequest(instructions, rawDiff string, staticFindings []findings.Finding, priorRedactions int) AnalysisRequest {
 	redacted := redact.Secrets(rawDiff)
 	return AnalysisRequest{
 		instructions:   instructions,
 		diff:           redacted.Text,
 		staticFindings: append([]findings.Finding(nil), staticFindings...),
-		redactionCount: redacted.Count,
+		redactionCount: priorRedactions + redacted.Count,
 	}
 }
 

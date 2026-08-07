@@ -1,13 +1,12 @@
-package prompt
+package ai
 
 import (
 	"context"
 	"strings"
 	"testing"
 
+	"code-review/internal/change"
 	"code-review/internal/findings"
-	"code-review/internal/gitdiff"
-	"code-review/internal/pathfilter"
 	"code-review/internal/redact"
 )
 
@@ -15,17 +14,16 @@ func TestBuilderCreatesLanguageIndependentRedactedBatches(t *testing.T) {
 	t.Parallel()
 
 	budget := Budget{MaxInputTokens: 700, MaxDiffTokens: 180, MaxStaticFindingTokens: 200}
-	builder, err := New(budget, pathfilter.New(pathfilter.DefaultPatterns()))
+	builder, err := New(budget)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	secret := "actual-provider-secret-value"
-	changes := gitdiff.ChangeSet{Files: []gitdiff.FileChange{
+	changes := change.ChangeSet{Files: []change.FileChange{
 		changedFile("cmd/main.go", []string{"func main() {", `password := "go-secret-value"`, "}"}),
 		changedFile("web/app.ts", []string{`const apiKey = "` + secret + `";`, "export const ready = true;"}),
 		changedFile("worker/task.py", []string{`token = "python-secret-value"`, "run_task()"}),
-		changedFile("node_modules/dependency.js", []string{`password = "excluded-secret"`}),
-		{NewPath: "assets/logo.png", Status: gitdiff.StatusAdded, Binary: true},
+		{NewPath: "assets/logo.png", Status: change.StatusAdded, Binary: true},
 	}}
 	localFinding := validFinding("web/app.ts", "Potential credential", "A local rule found a credential.")
 
@@ -56,8 +54,8 @@ func TestBuilderCreatesLanguageIndependentRedactedBatches(t *testing.T) {
 		if strings.Contains(batch.Request.Diff(), redact.Placeholder) {
 			seenRedaction = true
 		}
-		if strings.Contains(batch.Request.Diff(), "node_modules") || strings.Contains(batch.Request.Diff(), "logo.png") {
-			t.Fatalf("batch contains an excluded or binary file:\n%s", batch.Request.Diff())
+		if strings.Contains(batch.Request.Diff(), "logo.png") {
+			t.Fatalf("batch contains a binary file:\n%s", batch.Request.Diff())
 		}
 		for _, file := range batch.Files {
 			seenFiles[file] = true
@@ -86,7 +84,7 @@ func TestBuilderSplitsLargeDiffByFileAndHunk(t *testing.T) {
 	t.Parallel()
 
 	budget := Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
-	builder, err := New(budget, pathMatcherForTest())
+	builder, err := New(budget)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -94,7 +92,7 @@ func TestBuilderSplitsLargeDiffByFileAndHunk(t *testing.T) {
 	for index := 0; index < 30; index++ {
 		lines = append(lines, "changed line with useful context")
 	}
-	changes := gitdiff.ChangeSet{Files: []gitdiff.FileChange{changedFile("src/service.ts", lines)}}
+	changes := change.ChangeSet{Files: []change.FileChange{changedFile("src/service.ts", lines)}}
 
 	batches, err := builder.Build(context.Background(), changes, nil)
 	if err != nil {
@@ -117,12 +115,12 @@ func TestBuilderMarksLongLineTruncation(t *testing.T) {
 	t.Parallel()
 
 	budget := Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
-	builder, err := New(budget, pathMatcherForTest())
+	builder, err := New(budget)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	longLine := strings.Repeat("x", 2000)
-	changes := gitdiff.ChangeSet{Files: []gitdiff.FileChange{changedFile("dist-like-but-reviewed.js", []string{longLine})}}
+	changes := change.ChangeSet{Files: []change.FileChange{changedFile("dist-like-but-reviewed.js", []string{longLine})}}
 
 	batches, err := builder.Build(context.Background(), changes, nil)
 	if err != nil {
@@ -146,11 +144,11 @@ func TestBuilderBudgetsStaticFindings(t *testing.T) {
 	second := validFinding("main.go", "Second", strings.Repeat("long message ", 30))
 	staticLimit := estimateFindings([]findings.Finding{first})
 	budget := Budget{MaxInputTokens: 700, MaxDiffTokens: 120, MaxStaticFindingTokens: staticLimit}
-	builder, err := New(budget, pathMatcherForTest())
+	builder, err := New(budget)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	changes := gitdiff.ChangeSet{Files: []gitdiff.FileChange{changedFile("main.go", []string{"changed"})}}
+	changes := change.ChangeSet{Files: []change.FileChange{changedFile("main.go", []string{"changed"})}}
 
 	batches, err := builder.Build(context.Background(), changes, []findings.Finding{first, second})
 	if err != nil {
@@ -170,27 +168,27 @@ func TestBuilderBudgetsStaticFindings(t *testing.T) {
 func TestBuilderHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
-	builder, err := New(DefaultBudget(), pathMatcherForTest())
+	builder, err := New(DefaultBudget())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = builder.Build(ctx, gitdiff.ChangeSet{}, nil)
+	_, err = builder.Build(ctx, change.ChangeSet{}, nil)
 	if err != context.Canceled {
 		t.Fatalf("Build() error = %v, want context.Canceled", err)
 	}
 }
 
-func changedFile(path string, additions []string) gitdiff.FileChange {
-	lines := make([]gitdiff.Line, 0, len(additions))
+func changedFile(path string, additions []string) change.FileChange {
+	lines := make([]change.Line, 0, len(additions))
 	for index, content := range additions {
-		lines = append(lines, gitdiff.Line{Kind: gitdiff.LineAdded, NewLine: index + 1, Content: content})
+		lines = append(lines, change.Line{Kind: change.LineAdded, NewLine: index + 1, Content: content})
 	}
-	return gitdiff.FileChange{
+	return change.FileChange{
 		NewPath: path,
-		Status:  gitdiff.StatusAdded,
-		Hunks: []gitdiff.Hunk{{
+		Status:  change.StatusAdded,
+		Hunks: []change.Hunk{{
 			OldStart: 0,
 			OldLines: 0,
 			NewStart: 1,
@@ -212,8 +210,4 @@ func validFinding(file, title, message string) findings.Finding {
 		Confidence: 0.9,
 		Source:     findings.SourceLocalRule,
 	}
-}
-
-func pathMatcherForTest() pathfilter.Matcher {
-	return pathfilter.New(nil)
 }

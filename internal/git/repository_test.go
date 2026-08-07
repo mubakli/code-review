@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"code-review/internal/change"
 )
 
-func TestOpenAndStagedDiff(t *testing.T) {
+func TestOpenAndStagedChanges(t *testing.T) {
 	requireGit(t)
 
 	root := t.TempDir()
@@ -43,20 +45,19 @@ func TestOpenAndStagedDiff(t *testing.T) {
 		t.Fatalf("Root() = %q, want %q", repository.Root(), wantRoot)
 	}
 
-	patch, err := repository.StagedDiff(context.Background())
+	changes, err := repository.StagedChanges(context.Background())
 	if err != nil {
-		t.Fatalf("StagedDiff() error = %v", err)
+		t.Fatalf("StagedChanges() error = %v", err)
 	}
-	diff := string(patch)
-	if !strings.Contains(diff, "+const staged = true") {
-		t.Errorf("staged diff does not contain staged line:\n%s", diff)
+	if !changeSetContains(changes, "const staged = true") {
+		t.Errorf("staged changes do not contain staged line: %#v", changes)
 	}
-	if strings.Contains(diff, "unstaged") {
-		t.Errorf("staged diff contains unstaged line:\n%s", diff)
+	if changeSetContains(changes, "unstaged") {
+		t.Errorf("staged changes contain unstaged line: %#v", changes)
 	}
 }
 
-func TestStagedDiffSupportsRepositoryWithoutCommits(t *testing.T) {
+func TestStagedChangesSupportsRepositoryWithoutCommits(t *testing.T) {
 	requireGit(t)
 
 	root := t.TempDir()
@@ -68,12 +69,12 @@ func TestStagedDiffSupportsRepositoryWithoutCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	patch, err := repository.StagedDiff(context.Background())
+	changes, err := repository.StagedChanges(context.Background())
 	if err != nil {
-		t.Fatalf("StagedDiff() error = %v", err)
+		t.Fatalf("StagedChanges() error = %v", err)
 	}
-	if !strings.Contains(string(patch), "diff --git a/new.go b/new.go") {
-		t.Fatalf("unexpected staged patch:\n%s", patch)
+	if len(changes.Files) != 1 || changes.Files[0].Path() != "new.go" {
+		t.Fatalf("unexpected staged changes: %#v", changes)
 	}
 }
 
@@ -121,12 +122,12 @@ func TestOpenIgnoresRepositorySelectingEnvironment(t *testing.T) {
 	if repository.Root() != wantRoot {
 		t.Fatalf("Root() = %q, want %q", repository.Root(), wantRoot)
 	}
-	patch, err := repository.StagedDiff(context.Background())
+	changes, err := repository.StagedChanges(context.Background())
 	if err != nil {
-		t.Fatalf("StagedDiff() error = %v", err)
+		t.Fatalf("StagedChanges() error = %v", err)
 	}
-	if strings.Contains(string(patch), "other.go") {
-		t.Fatalf("staged diff was redirected by ambient Git variables:\n%s", patch)
+	if len(changes.Files) != 0 {
+		t.Fatalf("staged changes were redirected by ambient Git variables: %#v", changes)
 	}
 }
 
@@ -163,4 +164,17 @@ func writeTestFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
+}
+
+func changeSetContains(changes change.ChangeSet, content string) bool {
+	for _, file := range changes.Files {
+		for _, hunk := range file.Hunks {
+			for _, line := range hunk.Lines {
+				if strings.Contains(line.Content, content) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
