@@ -40,6 +40,38 @@ func TestRouteAgentsIgnoresDeletedSecurityTerms(t *testing.T) {
 	}
 }
 
+func TestRouteAgentsRunsSecurityForSensitivePaths(t *testing.T) {
+	t.Parallel()
+
+	changes := change.ChangeSet{Files: []change.FileChange{{
+		NewPath: ".env.production",
+		Status:  change.StatusAdded,
+		Hunks: []change.Hunk{{Lines: []change.Line{
+			{Kind: change.LineAdded, NewLine: 1, Content: "NODE_ENV=production"},
+		}}},
+	}}}
+	agents := ai.RouteAgents(changes, ai.DefaultAgents())
+	if len(agents) != 2 || agents[1].ID != ai.AgentSecurity {
+		t.Fatalf("sensitive path agents = %#v", agents)
+	}
+}
+
+func TestRouteAgentsRunsSecurityForTemplatingAndInjectionSurfaces(t *testing.T) {
+	t.Parallel()
+
+	changes := change.ChangeSet{Files: []change.FileChange{{
+		NewPath: "views/input.gohtml",
+		Status:  change.StatusModified,
+		Hunks: []change.Hunk{{Lines: []change.Line{
+			{Kind: change.LineAdded, NewLine: 1, Content: `innerHTML = qs["name"]`},
+		}}},
+	}}}
+	agents := ai.RouteAgents(changes, ai.DefaultAgents())
+	if len(agents) != 2 || agents[1].ID != ai.AgentSecurity {
+		t.Fatalf("injection agents = %#v", agents)
+	}
+}
+
 func TestSelectAgentsUsesRequestedOrder(t *testing.T) {
 	t.Parallel()
 
