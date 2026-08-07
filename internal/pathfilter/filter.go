@@ -1,6 +1,7 @@
 package pathfilter
 
 import (
+	"fmt"
 	"path"
 	"strings"
 )
@@ -32,6 +33,23 @@ type Matcher struct {
 
 func New(patterns []string) Matcher {
 	return Matcher{patterns: append([]string(nil), patterns...)}
+}
+
+// ValidatePattern checks the syntax accepted by Matcher. Callers that accept
+// user-provided patterns should reject invalid values rather than fail open.
+func ValidatePattern(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("exclusion pattern cannot be empty")
+	}
+	pattern := normalizePattern(value)
+	if pattern == "" {
+		return fmt.Errorf("exclusion pattern cannot be empty")
+	}
+	pattern = strings.TrimSuffix(pattern, "/")
+	if _, err := path.Match(pattern, ""); err != nil {
+		return fmt.Errorf("invalid exclusion pattern %q: %w", value, err)
+	}
+	return nil
 }
 
 func (m Matcher) Excludes(filePath string) bool {

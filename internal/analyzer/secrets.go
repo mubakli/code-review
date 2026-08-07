@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	privateKeyPattern    = regexp.MustCompile(`-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`)
+	privateKeyPattern    = regexp.MustCompile(`-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`)
 	knownTokenPattern    = regexp.MustCompile(`\b((AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})\b`)
-	literalSecretPattern = regexp.MustCompile("(?i)(api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd|secret)\\s*(:=|=|:)\\s*[\"'`]([^\"'`]{8,})[\"'`]")
+	literalSecretPattern = regexp.MustCompile("(?i)(api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password|passwd|secret)[\"'`]?\\s*(:=|=|:)\\s*[\"'`]([^\"'`]{8,})[\"'`]")
 )
 
 type secretMatch struct {

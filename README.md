@@ -31,12 +31,19 @@ The first local rule checks added lines for likely hardcoded credentials. A
 finding contains only the location and remediation guidance; the detected
 value is never copied into output.
 
+Code intended for a future AI provider passes through a separate,
+language-agnostic redaction boundary. Provider requests cannot directly set raw
+diff content; `llm.NewAnalysisRequest` redacts it locally before exposing it to
+a provider implementation.
+
 ## Usage
 
 ```bash
 go build -o reviewer ./cmd/reviewer
 ./reviewer review --staged
 ./reviewer review --staged --format json
+./reviewer review --staged --repo /path/to/repository
+./reviewer review --staged --exclude 'testdata/fixtures/'
 ```
 
 The command returns a non-zero exit code for usage, Git, parsing, or analysis
@@ -60,7 +67,24 @@ generated/
 .git/
 ```
 
-Project-level exclusion configuration will be added with the context engine.
+Additional patterns can be supplied with repeatable `--exclude` flags. Invalid
+patterns are rejected instead of silently failing open. Project-level
+configuration will be added with the context engine.
+
+## Safety And Privacy
+
+- Git is executed directly with argument arrays, never through a shell.
+- Ambient Git variables that could redirect the repository or index are
+  removed from the subprocess environment.
+- External diff and text-conversion helpers are disabled.
+- Staged diff output is capped at 32 MiB to bound local memory usage.
+- Excluded and binary files do not enter local analyzers.
+- Findings are validated before output and secret values are never copied into
+  finding messages.
+- AI request preparation redacts credential assignments, known provider tokens,
+  authorization tokens, credential-bearing URLs, and private-key bodies while
+  preserving diff line structure.
+- No AI provider is called in this milestone.
 
 ## Package Boundaries
 
@@ -71,6 +95,7 @@ Project-level exclusion configuration will be added with the context engine.
 - `internal/pathfilter` applies privacy and generated-file exclusions.
 - `internal/analyzer` hosts deterministic local analysis passes.
 - `internal/findings` defines the shared finding contract.
+- `internal/redact` removes secret material before any future provider request.
 - `internal/review` orchestrates filtering and analyzers without depending on
   VS Code.
 - `internal/llm` defines the vendor-neutral provider boundary. It has no
@@ -89,6 +114,7 @@ go test ./...
 go vet ./...
 ```
 
-The next milestone is the Go symbol-aware context engine: enclosing function
-resolution, direct symbol references, context ranking, token budgets, and
-secret redaction before any provider request.
+The next milestone is a language-independent, token-budgeted prompt builder.
+It will split large diffs into reviewable groups and provide a diff-only
+fallback for every text-based codebase. Language-specific symbol parsers can
+later enrich that baseline without becoming a requirement for review.

@@ -80,6 +80,7 @@ func (s *Service) ReviewChanges(ctx context.Context, changes gitdiff.ChangeSet) 
 	}
 
 	filtered := gitdiff.ChangeSet{Files: make([]gitdiff.FileChange, 0, len(changes.Files))}
+	reviewedPaths := make(map[string]struct{}, len(changes.Files))
 	for _, file := range changes.Files {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
@@ -91,6 +92,7 @@ func (s *Service) ReviewChanges(ctx context.Context, changes gitdiff.ChangeSet) 
 		}
 
 		filtered.Files = append(filtered.Files, file)
+		reviewedPaths[path] = struct{}{}
 		result.Summary.FilesReviewed++
 		result.Summary.HunksReviewed += len(file.Hunks)
 		for _, hunk := range file.Hunks {
@@ -123,6 +125,9 @@ func (s *Service) ReviewChanges(ctx context.Context, changes gitdiff.ChangeSet) 
 		for index, finding := range values {
 			if err := finding.Validate(); err != nil {
 				return Result{}, fmt.Errorf("run %s analyzer: finding %d is invalid: %w", name, index+1, err)
+			}
+			if _, exists := reviewedPaths[finding.File]; !exists {
+				return Result{}, fmt.Errorf("run %s analyzer: finding %d references a file outside the reviewed changes", name, index+1)
 			}
 		}
 		result.Findings = append(result.Findings, values...)

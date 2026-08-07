@@ -61,3 +61,18 @@ func TestMatcherCopiesPatterns(t *testing.T) {
 		t.Fatal("New() retained mutable caller storage")
 	}
 }
+
+func TestValidatePattern(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range []string{"private/", "docs/*.md", ".env.*"} {
+		if err := ValidatePattern(pattern); err != nil {
+			t.Errorf("ValidatePattern(%q) error = %v", pattern, err)
+		}
+	}
+	for _, pattern := range []string{"", "   ", "private/["} {
+		if err := ValidatePattern(pattern); err == nil {
+			t.Errorf("ValidatePattern(%q) error = nil", pattern)
+		}
+	}
+}

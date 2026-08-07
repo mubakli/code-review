@@ -96,6 +96,51 @@ func TestOpenHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestOpenIgnoresRepositorySelectingEnvironment(t *testing.T) {
+	requireGit(t)
+
+	target := t.TempDir()
+	other := t.TempDir()
+	runTestGit(t, target, "init", "--quiet")
+	runTestGit(t, other, "init", "--quiet")
+	writeTestFile(t, filepath.Join(other, "other.go"), "package other\n")
+	runTestGit(t, other, "add", "--", "other.go")
+
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+
+	repository, err := Open(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	wantRoot, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("resolve target repository: %v", err)
+	}
+	if repository.Root() != wantRoot {
+		t.Fatalf("Root() = %q, want %q", repository.Root(), wantRoot)
+	}
+	patch, err := repository.StagedDiff(context.Background())
+	if err != nil {
+		t.Fatalf("StagedDiff() error = %v", err)
+	}
+	if strings.Contains(string(patch), "other.go") {
+		t.Fatalf("staged diff was redirected by ambient Git variables:\n%s", patch)
+	}
+}
+
+func TestRunBoundsGitOutput(t *testing.T) {
+	requireGit(t)
+
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	_, _, err := run(context.Background(), root, 4, "rev-parse", "--show-toplevel")
+	if !errors.Is(err, errOutputLimit) {
+		t.Fatalf("run() error = %v, want errOutputLimit", err)
+	}
+}
+
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

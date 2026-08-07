@@ -179,7 +179,7 @@ func (p *diffParser) startHunk(header string) error {
 		NewStart: newStart,
 		NewLines: newLines,
 		Section:  matches[7],
-		Lines:    make([]Line, 0, oldLines+newLines),
+		Lines:    make([]Line, 0),
 	}
 	p.oldLine = oldStart
 	p.newLine = newStart

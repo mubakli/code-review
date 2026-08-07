@@ -35,7 +35,7 @@ func TestWriteHuman(t *testing.T) {
 		t.Fatalf("WriteHuman() error = %v", err)
 	}
 	for _, expected := range []string{
-		"1 file changed, 1 reviewed, 0 skipped (1 additions, 0 deletions).",
+		"1 file changed, 1 reviewed, 0 skipped (1 addition, 0 deletions).",
 		"HIGH [security]",
 		"config.go:3",
 		"Potential hardcoded secret",
@@ -58,6 +58,20 @@ func TestWriteHumanEscapesControlCharactersInPath(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `"bad\npath.go":3`) {
 		t.Fatalf("path was not escaped:\n%s", output.String())
+	}
+}
+
+func TestWriteHumanEscapesBidirectionalControlsInPath(t *testing.T) {
+	t.Parallel()
+
+	result := sampleResult()
+	result.Findings[0].File = "safe\u202Eog.niam"
+	var output bytes.Buffer
+	if err := WriteHuman(&output, result); err != nil {
+		t.Fatalf("WriteHuman() error = %v", err)
+	}
+	if !strings.Contains(output.String(), `"safe\u202eog.niam":3`) {
+		t.Fatalf("bidirectional control was not escaped:\n%s", output.String())
 	}
 }
 

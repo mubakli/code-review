@@ -33,13 +33,15 @@ func WriteHuman(writer io.Writer, result review.Result) error {
 
 	fmt.Fprintf(
 		&output,
-		"%d %s changed, %d reviewed, %d skipped (%d additions, %d deletions).\n",
+		"%d %s changed, %d reviewed, %d skipped (%d %s, %d %s).\n",
 		result.Summary.FilesChanged,
 		plural(result.Summary.FilesChanged, "file", "files"),
 		result.Summary.FilesReviewed,
 		result.Summary.FilesSkipped,
 		result.Summary.AddedLines,
+		plural(result.Summary.AddedLines, "addition", "additions"),
 		result.Summary.DeletedLines,
+		plural(result.Summary.DeletedLines, "deletion", "deletions"),
 	)
 	if len(result.Findings) == 0 {
 		output.WriteString("No findings.\n")
@@ -77,8 +79,10 @@ func writeFinding(output *strings.Builder, finding findings.Finding) {
 }
 
 func displayPath(value string) string {
-	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
-		return strconv.Quote(value)
+	if strings.IndexFunc(value, func(character rune) bool {
+		return unicode.IsControl(character) || unicode.Is(unicode.Cf, character)
+	}) >= 0 {
+		return strconv.QuoteToASCII(value)
 	}
 	return value
 }

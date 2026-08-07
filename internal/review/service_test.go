@@ -92,6 +92,32 @@ func TestReviewChangesRejectsInvalidAnalyzerFinding(t *testing.T) {
 	}
 }
 
+func TestReviewChangesRejectsFindingOutsideReviewedFiles(t *testing.T) {
+	t.Parallel()
+
+	finding := findings.Finding{
+		File:       "../other.go",
+		StartLine:  1,
+		EndLine:    1,
+		Severity:   findings.SeverityHigh,
+		Category:   findings.CategorySecurity,
+		Title:      "Out-of-scope finding",
+		Message:    "This finding does not refer to a reviewed file.",
+		Confidence: 0.9,
+		Source:     findings.SourceLocalRule,
+	}
+	service := New(pathfilter.New(nil), staticAnalyzer{findings: []findings.Finding{finding}})
+	changes := gitdiff.ChangeSet{Files: []gitdiff.FileChange{{
+		OldPath: "main.go",
+		NewPath: "main.go",
+		Status:  gitdiff.StatusModified,
+	}}}
+	_, err := service.ReviewChanges(context.Background(), changes)
+	if err == nil || !strings.Contains(err.Error(), "outside the reviewed changes") {
+		t.Fatalf("ReviewChanges() error = %v", err)
+	}
+}
+
 func TestReviewChangesHonorsCancellation(t *testing.T) {
 	t.Parallel()
 

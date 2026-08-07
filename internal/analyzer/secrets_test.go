@@ -20,10 +20,11 @@ func TestSecretAnalyzerChecksOnlyAddedLinesWithoutLeakingValues(t *testing.T) {
 		Hunks: []gitdiff.Hunk{{Lines: []gitdiff.Line{
 			{Kind: gitdiff.LineAdded, NewLine: 4, Content: `const apiKey = "` + providerCredential + `"`},
 			{Kind: gitdiff.LineAdded, NewLine: 5, Content: `password: "correct-horse-battery"`},
-			{Kind: gitdiff.LineAdded, NewLine: 6, Content: `const token = os.Getenv("TOKEN")`},
-			{Kind: gitdiff.LineAdded, NewLine: 7, Content: `secret: "example-placeholder"`},
+			{Kind: gitdiff.LineAdded, NewLine: 6, Content: `"client_secret": "json-secret-value-123"`},
+			{Kind: gitdiff.LineAdded, NewLine: 7, Content: `const token = os.Getenv("TOKEN")`},
+			{Kind: gitdiff.LineAdded, NewLine: 8, Content: `secret: "example-placeholder"`},
 			{Kind: gitdiff.LineDeleted, OldLine: 8, Content: `password: "deleted-secret"`},
-			{Kind: gitdiff.LineContext, OldLine: 9, NewLine: 8, Content: `password: "existing-secret"`},
+			{Kind: gitdiff.LineContext, OldLine: 9, NewLine: 9, Content: `password: "existing-secret"`},
 		}}},
 	}}}
 
@@ -31,8 +32,8 @@ func TestSecretAnalyzerChecksOnlyAddedLinesWithoutLeakingValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
-	if len(values) != 2 {
-		t.Fatalf("len(findings) = %d, want 2: %#v", len(values), values)
+	if len(values) != 3 {
+		t.Fatalf("len(findings) = %d, want 3: %#v", len(values), values)
 	}
 	if values[0].Severity != findings.SeverityHigh || values[0].StartLine != 4 {
 		t.Errorf("provider finding = %#v", values[0])
@@ -40,22 +41,27 @@ func TestSecretAnalyzerChecksOnlyAddedLinesWithoutLeakingValues(t *testing.T) {
 	if values[1].Severity != findings.SeverityMedium || values[1].StartLine != 5 {
 		t.Errorf("literal finding = %#v", values[1])
 	}
+	if values[2].Severity != findings.SeverityMedium || values[2].StartLine != 6 {
+		t.Errorf("JSON finding = %#v", values[2])
+	}
 
 	encoded, err := json.Marshal(values)
 	if err != nil {
 		t.Fatalf("marshal findings: %v", err)
 	}
-	if strings.Contains(string(encoded), providerCredential) || strings.Contains(string(encoded), "correct-horse-battery") {
+	if strings.Contains(string(encoded), providerCredential) || strings.Contains(string(encoded), "correct-horse-battery") || strings.Contains(string(encoded), "json-secret-value-123") {
 		t.Fatal("finding output leaked a detected credential")
 	}
 }
 
-func TestDetectSecretClassifiesPrivateKey(t *testing.T) {
+func TestDetectSecretClassifiesPrivateKeys(t *testing.T) {
 	t.Parallel()
 
-	match, detected := detectSecret("-----BEGIN PRIVATE KEY-----")
-	if !detected || match.severity != findings.SeverityCritical {
-		t.Fatalf("detectSecret() = %#v, %v", match, detected)
+	for _, header := range []string{"-----BEGIN PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----"} {
+		match, detected := detectSecret(header)
+		if !detected || match.severity != findings.SeverityCritical {
+			t.Errorf("detectSecret(%q) = %#v, %v", header, match, detected)
+		}
 	}
 }
 
