@@ -32,6 +32,10 @@ provider and nests AI findings beneath each file. Environment files and other
 local-only changes do not enter this diff view. All local and AI findings remain
 available in Problems.
 
+AI findings identify the specialist that produced them. Correctness review runs
+for every eligible staged change; security review is selectively added when the
+change contains security-relevant signals.
+
 Use `codeReview.exclude` for additional repository-relative exclusion patterns.
 Automatic review is controlled by `codeReview.autoReview` and
 `codeReview.debounceMs`. AI automation is independently controlled by

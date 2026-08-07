@@ -310,10 +310,10 @@ func TestReviewStagedRunsConfiguredAIProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reviewStaged() error = %v", err)
 	}
-	if result.AI == nil || result.AI.SuccessfulBatches != 1 || result.AI.FailedBatches != 0 {
+	if result.AI == nil || result.AI.SuccessfulBatches != 1 || result.AI.FailedBatches != 0 || len(result.AI.Agents) != 1 || result.AI.Agents[0] != string(ai.AgentCorrectness) {
 		t.Fatalf("AI summary = %#v", result.AI)
 	}
-	if len(result.Findings) != 1 || result.Findings[0].Source != findings.SourceAI {
+	if len(result.Findings) != 1 || result.Findings[0].Source != findings.SourceAI || result.Findings[0].AgentID != string(ai.AgentCorrectness) {
 		t.Fatalf("findings = %#v", result.Findings)
 	}
 }

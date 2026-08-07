@@ -58,12 +58,14 @@ const validResult = {
             provider: "openai",
             model: "review-model",
             reviewedFiles: ["main.go"],
+            agents: ["correctness"],
             batchCount: 1,
             successfulBatches: 1,
             failedBatches: 0
         }
     }));
     strict_1.default.deepEqual(result.ai?.reviewedFiles, ["main.go"]);
+    strict_1.default.deepEqual(result.ai?.agents, ["correctness"]);
 });
 (0, node_test_1.default)("parseSnapshotResult validates deterministic review IDs", () => {
     const snapshot = (0, protocol_1.parseSnapshotResult)(JSON.stringify({

@@ -42,6 +42,7 @@ type ReviewedFile struct {
 type AISummary struct {
 	Provider          string      `json:"provider"`
 	Model             string      `json:"model"`
+	Agents            []string    `json:"agents"`
 	ReviewedFiles     []string    `json:"reviewedFiles"`
 	BatchCount        int         `json:"batchCount"`
 	SuccessfulBatches int         `json:"successfulBatches"`
@@ -50,6 +51,7 @@ type AISummary struct {
 }
 
 type AIFailure struct {
+	AgentID string   `json:"agentId"`
 	Batch   int      `json:"batch"`
 	Files   []string `json:"files"`
 	Message string   `json:"message"`

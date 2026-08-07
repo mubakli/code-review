@@ -34,6 +34,7 @@ type Builder struct {
 	budget          Budget
 	diffTokenLimit  int
 	instructionCost int
+	instructions    string
 }
 
 func New(budget Budget) (Builder, error) {
@@ -46,7 +47,24 @@ func New(budget Budget) (Builder, error) {
 		budget:          budget,
 		diffTokenLimit:  diffLimit,
 		instructionCost: instructionCost,
+		instructions:    ReviewInstructions,
 	}, nil
+}
+
+func (b Builder) ForAgent(agent ReviewAgent) (Builder, error) {
+	instructions := strings.TrimSpace(agent.Instructions)
+	if instructions == "" {
+		return Builder{}, fmt.Errorf("agent instructions are required")
+	}
+	instructionCost := EstimateTokens(instructions)
+	diffLimit, err := b.budget.diffLimit(instructionCost)
+	if err != nil {
+		return Builder{}, err
+	}
+	b.instructions = instructions
+	b.instructionCost = instructionCost
+	b.diffTokenLimit = diffLimit
+	return b, nil
 }
 
 // Build creates language-independent, file-first review batches from an
@@ -134,7 +152,7 @@ func (b Builder) makeBatch(diff string, fragments []fragment, staticFindings []f
 	for _, value := range fragments {
 		redactionCount += value.redactionCount
 	}
-	request := newAnalysisRequest(ReviewInstructions, diff, selected, redactionCount)
+	request := newAnalysisRequest(b.instructions, diff, selected, redactionCount)
 	diffTokens := EstimateTokens(request.Diff())
 	estimated := b.instructionCost + diffTokens + estimateFindings(selected)
 	return Batch{

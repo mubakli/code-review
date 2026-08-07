@@ -48,7 +48,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 	staged := flags.Bool("staged", false, "review changes staged in the Git index")
 	format := flags.String("format", "human", "output format: human or json")
 	repository := flags.String("repo", workDirectory, "path inside the Git repository")
-	aiProvider := flags.String("ai-provider", string(config.AIProviderNone), "AI provider: none or openai")
+	aiProvider := flags.String("ai-provider", string(config.AIProviderNone), "AI provider: none, openai, or deepseek")
 	aiModel := flags.String("ai-model", "", "AI model name (required when AI is enabled)")
 	expectedReviewID := flags.String("expected-review-id", "", "reject review if the staged snapshot no longer matches this ID")
 	var excludes stringListFlag

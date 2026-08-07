@@ -73,12 +73,14 @@ test("parseReviewResult accepts AI-reviewed file paths", () => {
       provider: "openai",
       model: "review-model",
       reviewedFiles: ["main.go"],
+      agents: ["correctness"],
       batchCount: 1,
       successfulBatches: 1,
       failedBatches: 0
     }
   }));
   assert.deepEqual(result.ai?.reviewedFiles, ["main.go"]);
+  assert.deepEqual(result.ai?.agents, ["correctness"]);
 });
 
 test("parseSnapshotResult validates deterministic review IDs", () => {

@@ -101,7 +101,7 @@ class ReviewFileNode extends vscode.TreeItem {
 class ReviewFindingNode extends vscode.TreeItem {
   constructor(file: StagedFile, finding: ReviewFinding) {
     super(finding.title, vscode.TreeItemCollapsibleState.None);
-    this.description = `line ${finding.startLine} - ${finding.severity}`;
+    this.description = `line ${finding.startLine} - ${finding.severity}${finding.agentId === undefined ? "" : ` - ${finding.agentId}`}`;
     this.contextValue = "reviewFinding";
     this.iconPath = new vscode.ThemeIcon(severityIcon(finding.severity));
     this.command = {

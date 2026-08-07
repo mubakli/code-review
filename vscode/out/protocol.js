@@ -5,7 +5,7 @@ exports.parseReviewResult = parseReviewResult;
 exports.parseSnapshotResult = parseSnapshotResult;
 exports.reviewSchemaVersion = 2;
 const severities = new Set(["critical", "high", "medium", "low", "info"]);
-const categories = new Set(["security", "performance", "database", "maintainability", "quality"]);
+const categories = new Set(["security", "correctness", "performance", "database", "maintainability", "quality"]);
 const sources = new Set(["local-rule", "static-analysis", "sql-analyzer", "ai"]);
 function parseReviewResult(output) {
     let value;
@@ -116,7 +116,8 @@ function parseFinding(value, index) {
         message: text(finding.message, `${prefix}.message`),
         suggestion: optionalText(finding.suggestion, `${prefix}.suggestion`),
         confidence,
-        source
+        source,
+        agentId: finding.agentId === undefined ? undefined : singleLineText(finding.agentId, `${prefix}.agentId`)
     };
 }
 function parseAI(value) {
@@ -125,6 +126,7 @@ function parseAI(value) {
         provider: text(ai.provider, "ai.provider"),
         model: text(ai.model, "ai.model"),
         reviewedFiles: ai.reviewedFiles === undefined ? [] : textArray(ai.reviewedFiles, "ai.reviewedFiles"),
+        agents: ai.agents === undefined ? [] : textArray(ai.agents, "ai.agents"),
         batchCount: nonNegativeInteger(ai.batchCount, "ai.batchCount"),
         successfulBatches: nonNegativeInteger(ai.successfulBatches, "ai.successfulBatches"),
         failedBatches: nonNegativeInteger(ai.failedBatches, "ai.failedBatches")

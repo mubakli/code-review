@@ -66,8 +66,11 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review() error = %v", err)
 	}
-	if providerCalls != 1 || result.BatchCount != 1 || result.SuccessfulBatches != 1 || len(result.Failures) != 0 {
+	if providerCalls != 2 || result.BatchCount != 2 || result.SuccessfulBatches != 2 || len(result.Failures) != 0 {
 		t.Fatalf("unexpected orchestration metadata: calls=%d result=%#v", providerCalls, result)
+	}
+	if len(result.Agents) != 2 || result.Agents[0] != string(ai.AgentCorrectness) || result.Agents[1] != string(ai.AgentSecurity) {
+		t.Fatalf("Agents = %#v", result.Agents)
 	}
 	if len(result.ReviewedFiles) != 1 || result.ReviewedFiles[0] != "service.go" {
 		t.Fatalf("ReviewedFiles = %#v", result.ReviewedFiles)
@@ -84,7 +87,7 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 		t.Fatalf("duplicate was not consolidated into local finding: %#v", credential)
 	}
 	ignoredError := findByTitle(result.Findings, "Ignored error")
-	if ignoredError == nil || ignoredError.Source != findings.SourceAI {
+	if ignoredError == nil || ignoredError.Source != findings.SourceAI || ignoredError.AgentID != string(ai.AgentCorrectness) {
 		t.Fatalf("AI finding was not retained with AI source: %#v", result.Findings)
 	}
 }

@@ -53,6 +53,13 @@ budgeted AnalysisRequest values
 This diff-only fallback works for every text-based codebase. The CLI invokes a
 provider only when AI review is explicitly enabled.
 
+AI review uses selective specialist agents rather than one unrestricted prompt.
+The correctness agent runs for every eligible staged change. The security agent
+is added only when changed paths or added lines contain deterministic security
+signals. Each agent receives the same redacted, budgeted diff pipeline; Go
+assigns the trusted `agentId`, filters out-of-scope categories, and merges likely
+duplicates before returning findings.
+
 ## Usage
 
 ```bash

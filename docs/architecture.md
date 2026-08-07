@@ -272,6 +272,14 @@ and a matching issue concept or strong text similarity. A duplicate AI finding
 may raise severity or confidence and fill a missing suggestion, but it does not
 replace the deterministic title, message, or source.
 
+Specialist review agents are provider-neutral values owned by `internal/ai`.
+`CorrectnessAgent` is always routed; `SecurityAgent` is routed only from
+deterministic changed-line/path signals. Every routed agent builds its own
+redacted, token-budgeted request batches. Provider output cannot choose its
+identity: orchestration assigns `agentId` after validating file membership,
+changed-line location, and the category allowlist for that agent. Findings from
+all agents then pass through the existing deterministic-primary deduplication.
+
 ## Wire Contracts
 
 `review.Result` currently doubles as the CLI JSON response. This is deliberate

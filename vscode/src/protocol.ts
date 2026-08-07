@@ -13,6 +13,7 @@ export interface ReviewFinding {
   suggestion?: string;
   confidence: number;
   source: string;
+  agentId?: string;
 }
 
 export interface ReviewSummary {
@@ -29,6 +30,7 @@ export interface AIReviewSummary {
   provider: string;
   model: string;
   reviewedFiles: string[];
+  agents: string[];
   batchCount: number;
   successfulBatches: number;
   failedBatches: number;
@@ -57,7 +59,7 @@ export interface SnapshotResult {
 }
 
 const severities = new Set<FindingSeverity>(["critical", "high", "medium", "low", "info"]);
-const categories = new Set(["security", "performance", "database", "maintainability", "quality"]);
+const categories = new Set(["security", "correctness", "performance", "database", "maintainability", "quality"]);
 const sources = new Set(["local-rule", "static-analysis", "sql-analyzer", "ai"]);
 
 export function parseReviewResult(output: string): ReviewResult {
@@ -173,7 +175,8 @@ function parseFinding(value: unknown, index: number): ReviewFinding {
     message: text(finding.message, `${prefix}.message`),
     suggestion: optionalText(finding.suggestion, `${prefix}.suggestion`),
     confidence,
-    source
+    source,
+    agentId: finding.agentId === undefined ? undefined : singleLineText(finding.agentId, `${prefix}.agentId`)
   };
 }
 
@@ -183,6 +186,7 @@ function parseAI(value: unknown): AIReviewSummary {
     provider: text(ai.provider, "ai.provider"),
     model: text(ai.model, "ai.model"),
     reviewedFiles: ai.reviewedFiles === undefined ? [] : textArray(ai.reviewedFiles, "ai.reviewedFiles"),
+    agents: ai.agents === undefined ? [] : textArray(ai.agents, "ai.agents"),
     batchCount: nonNegativeInteger(ai.batchCount, "ai.batchCount"),
     successfulBatches: nonNegativeInteger(ai.successfulBatches, "ai.successfulBatches"),
     failedBatches: nonNegativeInteger(ai.failedBatches, "ai.failedBatches")

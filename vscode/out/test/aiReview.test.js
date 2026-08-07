@@ -39,6 +39,7 @@ const summary = {
             provider: "openai",
             model: "review-model",
             reviewedFiles: ["main.go"],
+            agents: ["correctness"],
             batchCount: 1,
             successfulBatches: 1,
             failedBatches: 0

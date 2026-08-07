@@ -382,7 +382,7 @@ function clearRepositoryDiagnostics(collection, diagnosticUris, repositoryRoot) 
 }
 function toDiagnostic(finding) {
     const diagnostic = new vscode.Diagnostic(new vscode.Range(finding.startLine - 1, 0, finding.endLine - 1, Number.MAX_SAFE_INTEGER), `${finding.title}\n\n${finding.message}${finding.suggestion === undefined ? "" : `\n\nSuggestion: ${finding.suggestion}`}`, diagnosticSeverity(finding.severity));
-    diagnostic.source = `Code Review: ${finding.source}`;
+    diagnostic.source = `Code Review: ${finding.source}${finding.agentId === undefined ? "" : `/${finding.agentId}`}`;
     diagnostic.code = finding.category;
     return diagnostic;
 }

@@ -174,6 +174,7 @@ func gitEnvironment() []string {
 		"GIT_WORK_TREE":                    {},
 		"LC_ALL":                           {},
 		"REVIEWER_OPENAI_API_KEY":          {},
+		"REVIEWER_DEEPSEEK_API_KEY":        {},
 	}
 
 	environment := make([]string, 0, len(os.Environ())+2)

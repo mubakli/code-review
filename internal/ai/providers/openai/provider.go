@@ -219,7 +219,7 @@ func responseSchema() map[string]any {
 						"startLine":  map[string]any{"type": "integer", "minimum": 1},
 						"endLine":    map[string]any{"type": "integer", "minimum": 1},
 						"severity":   map[string]any{"type": "string", "enum": []string{"critical", "high", "medium", "low", "info"}},
-						"category":   map[string]any{"type": "string", "enum": []string{"security", "performance", "database", "maintainability", "quality"}},
+						"category":   map[string]any{"type": "string", "enum": []string{"security", "correctness", "performance", "database", "maintainability", "quality"}},
 						"title":      map[string]any{"type": "string"},
 						"message":    map[string]any{"type": "string"},
 						"suggestion": map[string]any{"type": "string"},

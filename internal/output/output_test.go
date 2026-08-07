@@ -31,7 +31,7 @@ func TestWriteJSONIncludesOptionalAISummary(t *testing.T) {
 	t.Parallel()
 
 	result := sampleResult()
-	result.AI = &review.AISummary{Provider: "openai", Model: "review-model", ReviewedFiles: []string{"main.go"}, BatchCount: 2, SuccessfulBatches: 1, FailedBatches: 1}
+	result.AI = &review.AISummary{Provider: "openai", Model: "review-model", Agents: []string{"correctness"}, ReviewedFiles: []string{"main.go"}, BatchCount: 2, SuccessfulBatches: 1, FailedBatches: 1}
 	var output bytes.Buffer
 	if err := WriteJSON(&output, result); err != nil {
 		t.Fatalf("WriteJSON() error = %v", err)
@@ -40,7 +40,7 @@ func TestWriteJSONIncludesOptionalAISummary(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if decoded.AI == nil || decoded.AI.Provider != "openai" || decoded.AI.FailedBatches != 1 || len(decoded.AI.ReviewedFiles) != 1 {
+	if decoded.AI == nil || decoded.AI.Provider != "openai" || decoded.AI.FailedBatches != 1 || len(decoded.AI.ReviewedFiles) != 1 || len(decoded.AI.Agents) != 1 {
 		t.Fatalf("decoded AI summary = %#v", decoded.AI)
 	}
 }
@@ -72,10 +72,11 @@ func TestWriteHumanIncludesAISummary(t *testing.T) {
 	result.AI = &review.AISummary{
 		Provider:          "openai",
 		Model:             "review-model",
+		Agents:            []string{"correctness"},
 		BatchCount:        3,
 		SuccessfulBatches: 2,
 		FailedBatches:     1,
-		Failures:          []review.AIFailure{{Batch: 2, Files: []string{"config.go"}, Message: "rate limit\u001b[31m"}},
+		Failures:          []review.AIFailure{{AgentID: "correctness", Batch: 2, Files: []string{"config.go"}, Message: "rate limit\u001b[31m"}},
 	}
 	var output bytes.Buffer
 	if err := WriteHuman(&output, result); err != nil {
@@ -84,7 +85,10 @@ func TestWriteHumanIncludesAISummary(t *testing.T) {
 	if !strings.Contains(output.String(), "AI review (openai/review-model): 2 of 3 batches succeeded, 1 failed.") {
 		t.Fatalf("AI summary is missing:\n%s", output.String())
 	}
-	if !strings.Contains(output.String(), "AI batch 2 failed for config.go: rate limit�[31m") || strings.Contains(output.String(), "\u001b") {
+	if !strings.Contains(output.String(), "AI agents: correctness.") {
+		t.Fatalf("AI agents are missing:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "AI agent correctness batch 2 failed for config.go: rate limit�[31m") || strings.Contains(output.String(), "\u001b") {
 		t.Fatalf("AI failure was not safely rendered:\n%s", output.String())
 	}
 }

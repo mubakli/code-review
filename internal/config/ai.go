@@ -11,6 +11,7 @@ type AIProvider string
 const (
 	AIProviderNone   AIProvider = "none"
 	AIProviderOpenAI AIProvider = "openai"
+	AIProviderDeepSeek AIProvider = "deepseek"
 )
 
 const DefaultMaxOutputTokens = 4096
@@ -41,7 +42,7 @@ func (c AI) Validate() error {
 			return fmt.Errorf("AI model requires an enabled provider")
 		}
 		return nil
-	case AIProviderOpenAI:
+	case AIProviderOpenAI, AIProviderDeepSeek:
 		if strings.TrimSpace(c.Model) == "" {
 			return fmt.Errorf("AI model is required for provider %q", c.Provider)
 		}

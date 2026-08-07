@@ -21,6 +21,7 @@ type Category string
 
 const (
 	CategorySecurity        Category = "security"
+	CategoryCorrectness     Category = "correctness"
 	CategoryPerformance     Category = "performance"
 	CategoryDatabase        Category = "database"
 	CategoryMaintainability Category = "maintainability"
@@ -46,6 +47,7 @@ type Finding struct {
 	Suggestion string   `json:"suggestion,omitempty"`
 	Confidence float64  `json:"confidence"`
 	Source     string   `json:"source"`
+	AgentID    string   `json:"agentId,omitempty"`
 }
 
 // Validate rejects malformed analyzer output before it reaches CLI or editor
@@ -110,7 +112,7 @@ func validSeverity(value Severity) bool {
 
 func validCategory(value Category) bool {
 	switch value {
-	case CategorySecurity, CategoryPerformance, CategoryDatabase, CategoryMaintainability, CategoryQuality:
+	case CategorySecurity, CategoryCorrectness, CategoryPerformance, CategoryDatabase, CategoryMaintainability, CategoryQuality:
 		return true
 	default:
 		return false

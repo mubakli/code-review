@@ -53,6 +53,9 @@ func WriteHuman(writer io.Writer, result review.Result) error {
 			result.AI.BatchCount,
 			result.AI.FailedBatches,
 		)
+		if len(result.AI.Agents) > 0 {
+			fmt.Fprintf(&output, "AI agents: %s.\n", strings.Join(result.AI.Agents, ", "))
+		}
 		for _, failure := range result.AI.Failures {
 			files := make([]string, 0, len(failure.Files))
 			for _, file := range failure.Files {
@@ -60,7 +63,8 @@ func WriteHuman(writer io.Writer, result review.Result) error {
 			}
 			fmt.Fprintf(
 				&output,
-				"AI batch %d failed for %s: %s\n",
+				"AI agent %s batch %d failed for %s: %s\n",
+				failure.AgentID,
 				failure.Batch,
 				strings.Join(files, ", "),
 				displayText(failure.Message),

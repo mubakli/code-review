@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"code-review/internal/ai"
+	"code-review/internal/ai/providers/deepseek"
 	"code-review/internal/ai/providers/openai"
 	"code-review/internal/analyzers/secrets"
 	"code-review/internal/change"
@@ -16,7 +17,10 @@ import (
 	"code-review/internal/review"
 )
 
-const openAIAPIKeyEnvironment = "REVIEWER_OPENAI_API_KEY"
+const (
+	openAIAPIKeyEnvironment   = "REVIEWER_OPENAI_API_KEY"
+	deepSeekAPIKeyEnvironment = "REVIEWER_DEEPSEEK_API_KEY"
+)
 
 type reviewOptions struct {
 	ExtraExcludes []string
@@ -84,6 +88,7 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 	failures := make([]review.AIFailure, 0, len(aiResult.Failures))
 	for _, failure := range aiResult.Failures {
 		failures = append(failures, review.AIFailure{
+			AgentID: failure.AgentID,
 			Batch:   failure.Batch,
 			Files:   append([]string(nil), failure.Files...),
 			Message: failure.Message,
@@ -92,6 +97,7 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 	result.AI = &review.AISummary{
 		Provider:          string(options.AI.Provider),
 		Model:             options.AI.Model,
+		Agents:            append([]string(nil), aiResult.Agents...),
 		ReviewedFiles:     append([]string(nil), aiResult.ReviewedFiles...),
 		BatchCount:        aiResult.BatchCount,
 		SuccessfulBatches: aiResult.SuccessfulBatches,
@@ -126,6 +132,20 @@ func configuredProvider(providerConfig config.AI) (ai.Provider, error) {
 		})
 		if err != nil {
 			return nil, fmt.Errorf("configure OpenAI provider: %w", err)
+		}
+		return provider, nil
+	case config.AIProviderDeepSeek:
+		apiKey := strings.TrimSpace(os.Getenv(deepSeekAPIKeyEnvironment))
+		if apiKey == "" {
+			return nil, fmt.Errorf("%s is required for DeepSeek review", deepSeekAPIKeyEnvironment)
+		}
+		provider, err := deepseek.New(deepseek.Options{
+			APIKey:          apiKey,
+			Model:           providerConfig.Model,
+			MaxOutputTokens: providerConfig.MaxOutputTokens,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("configure DeepSeek provider: %w", err)
 		}
 		return provider, nil
 	default:
