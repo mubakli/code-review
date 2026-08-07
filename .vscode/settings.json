@@ -1,6 +1,6 @@
 {
     "codeReview.provider": "deepseek",
-    "codeReview.model": "deepseek-chat",
+    "codeReview.model": "deepseek-reasoner",
     "codeReview.ai.enabled": true,
     "codeReview.ai.autoReview": true
 }

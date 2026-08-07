@@ -110,7 +110,8 @@ func isLiteralSecret(value string) bool {
 		return false
 	}
 	switch strings.ToLower(value) {
-	case "false", "none", "null", "test", "true", "undefined":
+	case "false", "none", "null", "test", "true", "undefined",
+		"any", "bigint", "boolean", "never", "number", "object", "string", "symbol", "unknown", "void":
 		return false
 	default:
 		return true
