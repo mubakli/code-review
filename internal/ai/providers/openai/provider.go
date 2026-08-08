@@ -322,15 +322,17 @@ func triageSchema() map[string]any {
 				"type": "boolean",
 			},
 			"surfaces": map[string]any{
-				"type": "array",
+				"type":        "array",
+				"description": "Observables from the diff the deep security agent must examine (data flows, control-flow choices, changed boundaries) as areas to inspect; never confirmed vulnerabilities.",
 				"items": map[string]any{
 					"type":      "string",
 					"maxLength": 500,
 				},
 			},
 			"rationale": map[string]any{
-				"type":      "string",
-				"maxLength": 2000,
+				"type":        "string",
+				"description": "Why deep analysis is warranted, noting when enforcement may live outside this diff; never a vulnerability claim.",
+				"maxLength":   2000,
 			},
 		},
 	}

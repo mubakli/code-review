@@ -309,7 +309,12 @@ func TestSecurityPipelineEscalatesOnTriageDecision(t *testing.T) {
 			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
 		},
 		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
-			return &ai.TriageResponse{Status: ai.ResponseStatusComplete, Escalate: true, Surfaces: []string{"input handling"}, Rationale: "User input reaches a DB query."}, nil
+			return &ai.TriageResponse{
+				Status:    ai.ResponseStatusComplete,
+				Escalate:  true,
+				Surfaces:  []string{"user-controlled input reaches a database query built by string concatenation"},
+				Rationale: "The surface awaits confirmation; enforcement such as authorization middleware may live outside this diff.",
+			}, nil
 		},
 	}
 	agents, _ := ai.SelectAgents([]string{"security"})

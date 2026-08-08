@@ -277,13 +277,18 @@ replace the deterministic title, message, or source.
 
 Specialist review agents are provider-neutral values owned by `internal/ai`.
 The correctness agent always reviews every eligible staged change. The security
-pipeline runs a lightweight triage classifier on every change and escalates to a
+pipeline runs a lightweight triage router on every change and escalates to a
 deep security specialist only when deterministic keyword/path signals or the
-triage decision require it. Triage produces a binary `escalate` decision, never
-findings. The deep security specialist may receive related staged-file context
-resolved from the Git index (redacted and budgeted) to evaluate the full
-function or file surrounding the changed lines. Determined escalation is
-fail-closed: any triage provider or validation error triggers deep review.
+router decision require it. Triage routes, it never diagnoses: its `surfaces`
+are observables from the diff that the deep agent must examine (data flows,
+control-flow choices, changed boundaries) framed as areas to inspect — never
+confirmed vulnerabilities, because enforcement such as authorization middleware
+can live outside the diff. Its only decision is the binary `escalate`,
+recording no findings. The deep security specialist may receive related
+staged-file context resolved from the Git index (redacted and budgeted) to
+evaluate the full function or file surrounding the changed lines. Determined
+escalation is fail-closed: any triage provider or validation error triggers
+deep review.
 
 Provider output cannot choose its identity: orchestration assigns `agentId` after
 validating file membership, changed-line location, and the category allowlist.

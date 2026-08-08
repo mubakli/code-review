@@ -169,15 +169,37 @@ func DefaultAgents() []AgentSpec {
 	}
 }
 
-// securityTriagePrompt drives the lightweight router that classifies the
-// redacted diff before deep security review is considered.
-const securityTriagePrompt = `You are a security triage router for staged code changes. Decide ONLY whether the supplied redacted diff plausibly introduces or expands an attack or abuse surface that warrants a deep security review. Consider authentication and authorization, credentials or secret handling, injection, command or process execution, network calls and SSRF, file or path handling, deserialization, cryptography, sensitive data exposure, permission changes, and missing rate limits or abuse controls. Answer escalate=true whenever such a surface is plausible or you are uncertain; answer escalate=false only when the change is clearly unrelated to security. Never report findings.`
+// securityTriagePrompt drives the lightweight router that decides whether the
+// redacted diff warrants deep security review. Triage routes; it never
+// diagnoses: it describes what the deep security agent must examine, because
+// enforcement (e.g. an authorization middleware) can live outside the diff.
+const securityTriagePrompt = `You are a security triage router for staged code changes. Your job is routing, not diagnosis: you decide whether a diff warrants deep security review and describe WHAT to examine, never WHAT is wrong.
+
+Never conclude that a vulnerability exists or is absent. Do not say "SQL injection present", "IDOR confirmed", "open redirect", or any other finding-style claim. The diff is redacted and the surrounding system is invisible: the authorization middleware, validators, frameworks, and call sites that enforce or mitigate a risk live elsewhere. A surface visible in this diff may already be enforced outside it; only the deep security agent can confirm or dismiss that.
+
+Identify whether this change plausibly touches an attack or abuse surface, and describe each surface as an area the deep security agent must examine:
+- authentication and authorization (identity checks, ownership, object-level access, privilege boundaries)
+- credentials and secret handling
+- injection surfaces and dynamic construction (queries, commands, templates, serialization)
+- command or process execution
+- network calls, SSRF, and redirects
+- file and path handling, archive extraction, traversal
+- deserialization of untrusted data
+- cryptography and randomness
+- sensitive data exposure, logging, and transport
+- permission changes and privileged operations
+- missing rate limits or abuse controls
+
+In "surfaces" list only what the deep agent must inspect, phrased as observables in this diff (a data flow, a control-flow choice, a changed boundary) — "user-controlled input reaches a database query built by string concatenation", not "SQL injection exists".
+In "rationale" state why the deep analysis is warranted in at most two sentences; when enforcement is absent from the diff, say the surface awaits confirmation against the full codebase.
+
+Answer escalate=true whenever such a surface is plausible — including when the pattern is uncertain or the enforcement could live outside this diff; answer escalate=false only when the change is clearly unrelated to security. Never report findings, and never make claims that require files outside this diff.`
 
 // SecurityTriageRouter is the declarative router in front of the deep security
 // specialist. It produces routing decisions (escalate), never findings.
 var SecurityTriageRouter = AgentSpec{
 	ID:          AgentSecurityTriage,
-	Description: "Triage router that classifies changes for deep security review",
+	Description: "Triage router that routes changes for deep security review without diagnosing findings",
 	Prompt:      securityTriagePrompt,
 	Role:        RoleRouter,
 	Policy:      AlwaysRun{},

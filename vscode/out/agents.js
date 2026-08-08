@@ -12,7 +12,7 @@ exports.reviewAgents = [
     {
         id: "security",
         label: "Security",
-        description: "Lightweight triage on every change; deep review with staged context only when attack surface is detected"
+        description: "Lightweight triage on every change; deep review with staged context only when the router finds an attack surface to examine"
     }
 ];
 exports.defaultReviewAgentIDs = exports.reviewAgents.map(agent => agent.id);

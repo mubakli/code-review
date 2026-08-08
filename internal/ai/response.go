@@ -26,8 +26,12 @@ type ResponseFinding struct {
 	Confidence  float64               `json:"confidence"`
 }
 
-// TriageResponse is the lightweight security-triage decision. Triage never
-// produces findings; it only decides whether deep security review is needed.
+// TriageResponse is the lightweight security-triage decision. Triage routes,
+// it never diagnoses: it describes what the deep security agent must examine
+// and decides whether escalation is warranted. Surfaces are observables from
+// the diff (data flows, control-flow choices, changed boundaries) framed as
+// areas to inspect, never as confirmed vulnerabilities — enforcement such as
+// authorization middleware may live outside the diff.
 type TriageResponse struct {
 	Status    ResponseStatus `json:"status"`
 	Escalate  bool           `json:"escalate"`

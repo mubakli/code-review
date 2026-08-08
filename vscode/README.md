@@ -57,9 +57,11 @@ in the editor gutter and the readable provider/agent comment beside the code;
 the user does not need to navigate through the full Git diff first.
 
 AI findings identify the specialist that produced them. The security pipeline
-runs a lightweight triage on every change; deep review with related staged-file
-context is triggered only when an attack surface is detected. Findings use stable
-namespaced rule IDs and deterministic finding IDs.
+runs a lightweight triage router on every change; deep review with related
+staged-file context is triggered only when a surface worth examining is found.
+Triage routes, it never diagnoses: it describes what to inspect, because
+enforcement such as authorization middleware can live outside the diff.
+Findings use stable namespaced rule IDs and deterministic finding IDs.
 
 When an AI agent can produce an exact structured replacement, **Preview
 Suggested Fix** is available from the finding's lightbulb or Review Comments
