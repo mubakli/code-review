@@ -249,9 +249,9 @@
         },
         "codeReview.ai.autoReview": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "scope": "resource",
-          "description": "Run configured AI analysis automatically after staged changes."
+          "description": "Run configured AI analysis automatically after staged changes. Off by default; use Code Review: Review Staged Changes to run AI analysis manually."
         }
       }
     }

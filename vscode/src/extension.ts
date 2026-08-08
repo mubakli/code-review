@@ -128,7 +128,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const agents = configuredReviewAgentIDs(configuration.get<string[]>("ai.agents", []));
     providerTree.update({
       agents,
-      autoReview: enabled && configuration.get<boolean>("ai.autoReview", true),
+      autoReview: enabled && configuration.get<boolean>("ai.autoReview", false),
       enabled,
       keyStored,
       model,
@@ -412,7 +412,7 @@ async function readConfiguration(context: vscode.ExtensionContext, repositoryRoo
   const uri = vscode.Uri.file(repositoryRoot);
   const configuration = vscode.workspace.getConfiguration("codeReview", uri);
   return {
-    aiAutoReview: configuration.get<boolean>("ai.autoReview", true),
+    aiAutoReview: configuration.get<boolean>("ai.autoReview", false),
     agents: configuredReviewAgentIDs(configuration.get<string[]>("ai.agents", [])),
     aiEnabled: configuration.get<boolean>("ai.enabled", false),
     autoReview: configuration.get<boolean>("autoReview", false),
@@ -774,7 +774,7 @@ async function configureAIProvider(context: vscode.ExtensionContext, repositoryR
     }
   }
   const approval = await vscode.window.showWarningMessage(
-    `Enable automatic ${provider.label} review with ${model}? Eligible staged code will be redacted locally before it is sent.`,
+    `Enable ${provider.label} review with ${model}? Eligible staged code will be redacted locally before it is sent. AI analysis runs only when you invoke Review Staged Changes.`,
     { modal: true },
     "Enable AI Review"
   );
@@ -784,9 +784,8 @@ async function configureAIProvider(context: vscode.ExtensionContext, repositoryR
   await configuration.update("provider", provider.id, vscode.ConfigurationTarget.Workspace);
   await configuration.update("model", model, vscode.ConfigurationTarget.Workspace);
   await configuration.update("ai.enabled", true, vscode.ConfigurationTarget.Workspace);
-  await configuration.update("ai.autoReview", true, vscode.ConfigurationTarget.Workspace);
   await context.workspaceState.update(approvalKey(repositoryRoot), `${provider.id}:${model}`);
-  void vscode.window.showInformationMessage(`${provider.label} · ${model} selected for automatic review.`);
+  void vscode.window.showInformationMessage(`${provider.label} · ${model} selected. Run "Code Review: Review Staged Changes" to analyze.`);
 }
 
 async function selectAIModel(context: vscode.ExtensionContext, repositoryRoot: string): Promise<void> {
@@ -822,7 +821,7 @@ async function selectAIModel(context: vscode.ExtensionContext, repositoryRoot: s
     return;
   }
   const approval = await vscode.window.showWarningMessage(
-    `Use ${provider.label} model ${model.trim()} for automatic staged review?`,
+    `Use ${provider.label} model ${model.trim()} for staged review?`,
     { modal: true },
     "Use Model"
   );

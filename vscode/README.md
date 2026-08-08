@@ -22,8 +22,10 @@ explicit force re-run command.
 For local-only review, findings appear only in Problems. To enable AI review,
 run **Code Review: Configure AI Provider**. The guided flow selects OpenAI or
 DeepSeek, offers recommended models or a custom model ID, stores the provider's
-API key in VS Code `SecretStorage`, and enables automatic AI review. Provider
-keys remain separate. Choosing **Local review only** disables external requests.
+API key in VS Code `SecretStorage`, and enables AI review. Provider keys remain
+separate. Choosing **Local review only** disables external requests. AI analysis
+never starts on its own: it runs only when you invoke **Code Review: Review
+Staged Changes**, unless you explicitly opt into `codeReview.ai.autoReview`.
 
 The selected provider is always visible in two places:
 
@@ -36,10 +38,10 @@ and API-key rows for direct changes without repeating the full setup flow.
 Click the agents row or run **Code Review: Select AI Review Agents** to switch
 between Correctness, Security, or both without changing provider or model.
 
-During the AI phase, an animated status-bar item, an **AI review in progress**
-row in the AI Provider view, and a cancellable native progress notification stay
-visible. Local diagnostics are published before this progress starts, so
-cancelling AI review does not remove local findings.
+During the AI phase, an animated status-bar item and an **AI review in
+progress** row in the AI Provider view stay visible; no popup is shown. Local
+diagnostics are published before the AI phase starts, so local findings are
+available even while AI analysis is running.
 
 After AI review, the dedicated **Code Review** Activity Bar view lists only
 files that contain actual AI comments; it is separate from Source Control's full
@@ -67,10 +69,11 @@ unsafe, or the working-tree file differs from staged content. A successful apply
 creates an undoable unsaved editor change; it never saves or stages the file.
 
 Use `codeReview.exclude` for additional repository-relative exclusion patterns.
-Automatic review is controlled by `codeReview.autoReview` and
-`codeReview.debounceMs`. AI automation is independently controlled by
-`codeReview.ai.autoReview`. Use **Pause Automatic Reviews** and **Resume
-Automatic Reviews** for large staging sessions.
+Automatic local review is controlled by `codeReview.autoReview` and
+`codeReview.debounceMs`. AI analysis is manual by default;
+`codeReview.ai.autoReview` opts back into running it after staged changes. Use
+**Pause Automatic Reviews** and **Resume Automatic Reviews** for large staging
+sessions.
 
 ## Development
 

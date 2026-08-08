@@ -1,6 +1,5 @@
 {
     "codeReview.provider": "deepseek",
     "codeReview.model": "deepseek-reasoner",
-    "codeReview.ai.enabled": true,
-    "codeReview.ai.autoReview": true
+    "codeReview.ai.enabled": true
 }
