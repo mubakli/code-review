@@ -66,7 +66,11 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 			},
 		}, nil
 	}}
-	orchestrator := newOrchestrator(t, builder, provider)
+	agents, _ := ai.SelectAgents([]string{"correctness", "security"})
+	orchestrator, err := ai.NewOrchestratorWithAgents(builder, provider, agents)
+	if err != nil {
+		t.Fatalf("NewOrchestratorWithAgents() error = %v", err)
+	}
 
 	result, err := orchestrator.Review(context.Background(), changes, []findings.Finding{local})
 	if err != nil {
@@ -136,7 +140,8 @@ func TestOrchestratorRejectsInvalidResponsesWithoutLosingLocalFindings(t *testin
 			provider := mock.Provider{AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
 				return test.response, nil
 			}}
-			orchestrator := newOrchestrator(t, newBuilder(t, ai.DefaultBudget()), provider)
+			agents, _ := ai.SelectAgents([]string{"correctness"})
+			orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
 			result, err := orchestrator.Review(context.Background(), changes, []findings.Finding{local})
 			if err != nil {
 				t.Fatalf("Review() error = %v", err)
@@ -169,7 +174,8 @@ func TestOrchestratorContinuesAfterProviderFailure(t *testing.T) {
 		}
 		return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{}}, nil
 	}}
-	orchestrator := newOrchestrator(t, builder, provider)
+	agents, _ := ai.SelectAgents([]string{"correctness"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(builder, provider, agents)
 
 	result, err := orchestrator.Review(context.Background(), changes, nil)
 	if err != nil {
@@ -191,7 +197,8 @@ func TestOrchestratorHonorsCancellation(t *testing.T) {
 		providerCalled = true
 		return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
 	}}
-	orchestrator := newOrchestrator(t, newBuilder(t, ai.DefaultBudget()), provider)
+	agents, _ := ai.SelectAgents([]string{"correctness"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -212,6 +219,95 @@ func TestNewOrchestratorRequiresProvider(t *testing.T) {
 	}
 }
 
+func TestSecurityPipelineSkipsDeepReviewWhenTriageClears(t *testing.T) {
+	t.Parallel()
+
+	changes := addedFile("service.go", []string{"return result"})
+	provider := mock.Provider{
+		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+			t.Fatal("deep security Analyze was called unexpectedly")
+			return nil, nil
+		},
+	}
+	agents, _ := ai.SelectAgents([]string{"security"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+
+	result, err := orchestrator.Review(context.Background(), changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !containsAgent(result.Agents, string(ai.AgentSecurityTriage)) {
+		t.Fatalf("security-triage agent is missing: %#v", result.Agents)
+	}
+	if containsAgent(result.Agents, string(ai.AgentSecurity)) {
+		t.Fatalf("deep security ran despite triage clearing: %#v", result.Agents)
+	}
+}
+
+func TestSecurityPipelineEscalatesOnTriageDecision(t *testing.T) {
+	t.Parallel()
+
+	changes := addedFile("service.go", []string{"return result"})
+	securityCalled := false
+	provider := mock.Provider{
+		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+			securityCalled = true
+			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+		},
+		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
+			return &ai.TriageResponse{Status: ai.ResponseStatusComplete, Escalate: true, Surfaces: []string{"input handling"}, Rationale: "User input reaches a DB query."}, nil
+		},
+	}
+	agents, _ := ai.SelectAgents([]string{"security"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+
+	result, err := orchestrator.Review(context.Background(), changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !containsAgent(result.Agents, string(ai.AgentSecurityTriage)) {
+		t.Fatalf("security-triage agent is missing: %#v", result.Agents)
+	}
+	if !containsAgent(result.Agents, string(ai.AgentSecurity)) {
+		t.Fatalf("deep security was not escalated: %#v", result.Agents)
+	}
+	if !securityCalled {
+		t.Fatal("deep security Analyze was not called")
+	}
+}
+
+func TestSecurityPipelineFailClosedOnTriageError(t *testing.T) {
+	t.Parallel()
+
+	changes := addedFile("service.go", []string{"return result"})
+	securityCalled := false
+	provider := mock.Provider{
+		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+			securityCalled = true
+			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+		},
+		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
+			return nil, errors.New("triage provider unavailable")
+		},
+	}
+	agents, _ := ai.SelectAgents([]string{"security"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+
+	result, err := orchestrator.Review(context.Background(), changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !containsAgent(result.Agents, string(ai.AgentSecurity)) {
+		t.Fatalf("deep security was not escalated on triage failure: %#v", result.Agents)
+	}
+	if !securityCalled {
+		t.Fatal("deep security Analyze was not called after triage failure")
+	}
+	if len(result.Failures) != 1 || result.Failures[0].AgentID != string(ai.AgentSecurityTriage) {
+		t.Fatalf("triage failure was not recorded: %#v", result.Failures)
+	}
+}
+
 func newBuilder(t *testing.T, budget ai.Budget) ai.Builder {
 	t.Helper()
 	builder, err := ai.New(budget)
@@ -219,15 +315,6 @@ func newBuilder(t *testing.T, budget ai.Budget) ai.Builder {
 		t.Fatalf("ai.New() error = %v", err)
 	}
 	return builder
-}
-
-func newOrchestrator(t *testing.T, builder ai.Builder, provider ai.Provider) *ai.Orchestrator {
-	t.Helper()
-	orchestrator, err := ai.NewOrchestrator(builder, provider)
-	if err != nil {
-		t.Fatalf("NewOrchestrator() error = %v", err)
-	}
-	return orchestrator
 }
 
 func addedFile(path string, additions []string) change.ChangeSet {
@@ -272,6 +359,15 @@ func findByTitle(values []findings.Finding, title string) *findings.Finding {
 		}
 	}
 	return nil
+}
+
+func containsAgent(agents []string, id string) bool {
+	for _, agent := range agents {
+		if agent == id {
+			return true
+		}
+	}
+	return false
 }
 
 func withFile(value ai.ResponseFinding, file string) ai.ResponseFinding {

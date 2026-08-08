@@ -19,6 +19,7 @@ import (
 const (
 	defaultEndpoint        = "https://api.deepseek.com/chat/completions"
 	defaultMaxOutputTokens = 4096
+	triageMaxOutputTokens  = 512
 	maxResponseBytes       = 4 << 20
 )
 
@@ -85,9 +86,11 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	input, err := json.Marshal(struct {
 		Diff           string             `json:"diff"`
 		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
+		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
 	}{
 		Diff:           request.Diff(),
 		StaticFindings: request.StaticFindings(),
+		RelatedContext: request.ContextFiles(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode DeepSeek review input: %w", err)
@@ -105,37 +108,11 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	if err != nil {
 		return nil, fmt.Errorf("encode DeepSeek request: %w", err)
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
+	content, err := p.post(ctx, payload)
 	if err != nil {
-		return nil, fmt.Errorf("create DeepSeek request: %w", err)
+		return nil, err
 	}
-	httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("User-Agent", "code-review/0")
-
-	response, err := p.client.Do(httpRequest)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, fmt.Errorf("call DeepSeek API: %w", err)
-	}
-	defer response.Body.Close()
-	body, err := readBounded(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read DeepSeek response: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, apiError(response.StatusCode, body, p.apiKey)
-	}
-	var envelope chatResponse
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("decode DeepSeek response envelope: %w", err)
-	}
-	if len(envelope.Choices) == 0 || strings.TrimSpace(envelope.Choices[0].Message.Content) == "" {
-		return nil, fmt.Errorf("DeepSeek response contains no output text")
-	}
-	decoder := json.NewDecoder(strings.NewReader(envelope.Choices[0].Message.Content))
+	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
 	var analysis ai.AnalysisResponse
 	if err := decoder.Decode(&analysis); err != nil {
@@ -148,7 +125,89 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	return &analysis, nil
 }
 
+func (p *Provider) Triage(ctx context.Context, request ai.AnalysisRequest) (*ai.TriageResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	input, err := json.Marshal(struct {
+		Diff           string             `json:"diff"`
+		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
+		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
+	}{
+		Diff:           request.Diff(),
+		StaticFindings: request.StaticFindings(),
+		RelatedContext: request.ContextFiles(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode DeepSeek triage input: %w", err)
+	}
+	payload, err := json.Marshal(chatRequest{
+		Model: p.model,
+		Messages: []message{
+			{Role: "system", Content: request.Instructions() + triageStructuredOutputInstructions},
+			{Role: "user", Content: string(input)},
+		},
+		ResponseFormat:  responseFormat{Type: "json_object"},
+		MaxOutputTokens: triageMaxOutputTokens,
+		Stream:          false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode DeepSeek triage request: %w", err)
+	}
+	content, err := p.post(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(content))
+	decoder.DisallowUnknownFields()
+	var triage ai.TriageResponse
+	if err := decoder.Decode(&triage); err != nil {
+		return nil, fmt.Errorf("decode DeepSeek structured triage: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("DeepSeek structured triage contains trailing JSON")
+	}
+	return &triage, nil
+}
+
+func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("create DeepSeek request: %w", err)
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("User-Agent", "code-review/0")
+
+	response, err := p.client.Do(httpRequest)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", fmt.Errorf("call DeepSeek API: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := readBounded(response.Body)
+	if err != nil {
+		return "", fmt.Errorf("read DeepSeek response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return "", apiError(response.StatusCode, body, p.apiKey)
+	}
+	var envelope chatResponse
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", fmt.Errorf("decode DeepSeek response envelope: %w", err)
+	}
+	if len(envelope.Choices) == 0 || strings.TrimSpace(envelope.Choices[0].Message.Content) == "" {
+		return "", fmt.Errorf("DeepSeek response contains no output text")
+	}
+	return envelope.Choices[0].Message.Content, nil
+}
+
 const structuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"status":"complete","findings":[{"file":"relative/path","startLine":1,"endLine":1,"severity":"critical|high|medium|low|info","category":"security|correctness|performance|database|maintainability|quality","title":"short title","message":"evidence-based explanation","suggestion":"concise remediation or empty string","proposedFix":null,"confidence":0.0}]}. Every finding must include proposedFix as null or {"description":"nonblank description","startLine":1,"endLine":1,"replacement":"complete replacement text without diff prefixes"}. A proposed fix replaces complete lines, its range must exactly equal the finding range, and every line in both ranges must be an added diff line. Use null unless an exact safe replacement is possible. Never use redaction or truncation placeholders in replacement text. Do not return ruleId or findingId; those are assigned by the reviewer. Use an empty findings array when no issue exists.`
+
+const triageStructuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"status":"complete","escalate":true,"surfaces":["input handling","command execution"],"rationale":"brief explanation why escalation is recommended"}. escalate must be true when the diff plausibly introduces an attack or abuse surface (or you are uncertain); escalate must be false only when the change is clearly unrelated to security. surfaces is an array of short labels identifying suspected surfaces. rationale explains the decision in at most two sentences.`
 
 type chatRequest struct {
 	Model           string         `json:"model"`

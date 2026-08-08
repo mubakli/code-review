@@ -15,7 +15,7 @@ export const reviewAgents: ReviewAgentDefinition[] = [
   {
     id: "security",
     label: "Security",
-    description: "Injection, authorization, credentials, unsafe input, and data exposure"
+    description: "Lightweight triage on every change; deep review with staged context only when attack surface is detected"
   }
 ];
 

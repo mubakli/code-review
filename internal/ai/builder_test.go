@@ -27,7 +27,7 @@ func TestBuilderCreatesLanguageIndependentRedactedBatches(t *testing.T) {
 	}}
 	localFinding := validFinding("web/app.ts", "Potential credential", "A local rule found a credential.")
 
-	batches, err := builder.Build(context.Background(), changes, []findings.Finding{localFinding})
+	batches, err := builder.Build(context.Background(), changes, []findings.Finding{localFinding}, nil)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestBuilderSplitsLargeDiffByFileAndHunk(t *testing.T) {
 	}
 	changes := change.ChangeSet{Files: []change.FileChange{changedFile("src/service.ts", lines)}}
 
-	batches, err := builder.Build(context.Background(), changes, nil)
+	batches, err := builder.Build(context.Background(), changes, nil, nil)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestBuilderMarksLongLineTruncation(t *testing.T) {
 	longLine := strings.Repeat("x", 2000)
 	changes := change.ChangeSet{Files: []change.FileChange{changedFile("dist-like-but-reviewed.js", []string{longLine})}}
 
-	batches, err := builder.Build(context.Background(), changes, nil)
+	batches, err := builder.Build(context.Background(), changes, nil, nil)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBuilderBudgetsStaticFindings(t *testing.T) {
 	}
 	changes := change.ChangeSet{Files: []change.FileChange{changedFile("main.go", []string{"changed"})}}
 
-	batches, err := builder.Build(context.Background(), changes, []findings.Finding{first, second})
+	batches, err := builder.Build(context.Background(), changes, []findings.Finding{first, second}, nil)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestBuilderHonorsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = builder.Build(ctx, change.ChangeSet{}, nil)
+	_, err = builder.Build(ctx, change.ChangeSet{}, nil, nil)
 	if err != context.Canceled {
 		t.Fatalf("Build() error = %v, want context.Canceled", err)
 	}

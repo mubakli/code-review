@@ -107,9 +107,44 @@ func preparedRequest(t *testing.T, secret string) ai.AnalysisRequest {
 			{Kind: change.LineAdded, NewLine: 1, Content: `password = "` + secret + `"`},
 		}}},
 	}}}
-	batches, err := builder.Build(context.Background(), changes, nil)
+	batches, err := builder.Build(context.Background(), changes, nil, nil)
 	if err != nil || len(batches) != 1 {
 		t.Fatalf("Build() = %#v, %v", batches, err)
 	}
 	return batches[0].Request
+}
+
+func TestProviderTriageProducesStructuredDecision(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		structured, err := json.Marshal(ai.TriageResponse{
+			Status:    ai.ResponseStatusComplete,
+			Escalate:  true,
+			Surfaces:  []string{"input handling"},
+			Rationale: "User input reaches a command.",
+		})
+		if err != nil {
+			t.Fatalf("encode structured triage fixture: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{"content": string(structured)},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := New(Options{APIKey: "test-key", Model: "deepseek-chat", Endpoint: server.URL, HTTPClient: server.Client(), AllowHTTP: true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	response, err := provider.Triage(context.Background(), preparedRequest(t, "test-secret"))
+	if err != nil {
+		t.Fatalf("Triage() error = %v", err)
+	}
+	if !response.Escalate || len(response.Surfaces) != 1 {
+		t.Fatalf("triage response = %#v", response)
+	}
 }

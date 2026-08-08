@@ -7,23 +7,21 @@ import (
 	"code-review/internal/change"
 )
 
-func TestRouteAgentsAlwaysUsesCorrectnessAndSelectsSecurityBySignal(t *testing.T) {
+func TestRequiresSecurityReviewDetectsKeywordsInAddedLines(t *testing.T) {
 	t.Parallel()
 
 	ordinary := addedFile("service.go", []string{"return result"})
-	agents := ai.RouteAgents(ordinary, ai.DefaultAgents())
-	if len(agents) != 1 || agents[0].ID != ai.AgentCorrectness {
-		t.Fatalf("ordinary agents = %#v", agents)
+	if ai.RequiresSecurityReview(ordinary) {
+		t.Fatal("RequiresSecurityReview should return false for ordinary changes")
 	}
 
 	security := addedFile("service.go", []string{`password := request.FormValue("password")`})
-	agents = ai.RouteAgents(security, ai.DefaultAgents())
-	if len(agents) != 2 || agents[0].ID != ai.AgentCorrectness || agents[1].ID != ai.AgentSecurity {
-		t.Fatalf("security agents = %#v", agents)
+	if !ai.RequiresSecurityReview(security) {
+		t.Fatal("RequiresSecurityReview should return true for security keyword changes")
 	}
 }
 
-func TestRouteAgentsIgnoresDeletedSecurityTerms(t *testing.T) {
+func TestRequiresSecurityReviewIgnoresDeletedLines(t *testing.T) {
 	t.Parallel()
 
 	changes := change.ChangeSet{Files: []change.FileChange{{
@@ -34,13 +32,12 @@ func TestRouteAgentsIgnoresDeletedSecurityTerms(t *testing.T) {
 			{Kind: change.LineAdded, NewLine: 1, Content: "value = safe"},
 		}}},
 	}}}
-	agents := ai.RouteAgents(changes, ai.DefaultAgents())
-	if len(agents) != 1 || agents[0].ID != ai.AgentCorrectness {
-		t.Fatalf("agents = %#v", agents)
+	if ai.RequiresSecurityReview(changes) {
+		t.Fatal("RequiresSecurityReview should ignore deleted security terms")
 	}
 }
 
-func TestRouteAgentsRunsSecurityForSensitivePaths(t *testing.T) {
+func TestRequiresSecurityReviewDetectsSensitivePaths(t *testing.T) {
 	t.Parallel()
 
 	changes := change.ChangeSet{Files: []change.FileChange{{
@@ -50,13 +47,12 @@ func TestRouteAgentsRunsSecurityForSensitivePaths(t *testing.T) {
 			{Kind: change.LineAdded, NewLine: 1, Content: "NODE_ENV=production"},
 		}}},
 	}}}
-	agents := ai.RouteAgents(changes, ai.DefaultAgents())
-	if len(agents) != 2 || agents[1].ID != ai.AgentSecurity {
-		t.Fatalf("sensitive path agents = %#v", agents)
+	if !ai.RequiresSecurityReview(changes) {
+		t.Fatal("RequiresSecurityReview should return true for sensitive paths")
 	}
 }
 
-func TestRouteAgentsRunsSecurityForTemplatingAndInjectionSurfaces(t *testing.T) {
+func TestRequiresSecurityReviewDetectsInjectionSurfaces(t *testing.T) {
 	t.Parallel()
 
 	changes := change.ChangeSet{Files: []change.FileChange{{
@@ -66,9 +62,8 @@ func TestRouteAgentsRunsSecurityForTemplatingAndInjectionSurfaces(t *testing.T) 
 			{Kind: change.LineAdded, NewLine: 1, Content: `innerHTML = qs["name"]`},
 		}}},
 	}}}
-	agents := ai.RouteAgents(changes, ai.DefaultAgents())
-	if len(agents) != 2 || agents[1].ID != ai.AgentSecurity {
-		t.Fatalf("injection agents = %#v", agents)
+	if !ai.RequiresSecurityReview(changes) {
+		t.Fatal("RequiresSecurityReview should return true for injection surfaces")
 	}
 }
 

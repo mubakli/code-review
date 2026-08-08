@@ -68,9 +68,9 @@ func (b Builder) ForAgent(agent ReviewAgent) (Builder, error) {
 }
 
 // Build creates language-independent, file-first review batches from an
-// already scoped change set. Unsupported languages use this diff-only path;
-// future symbol parsers can add context without replacing it.
-func (b Builder) Build(ctx context.Context, changes change.ChangeSet, staticFindings []findings.Finding) ([]Batch, error) {
+// already scoped change set. Unsupported languages use this diff-only path.
+// Related staged context, when supplied, is redacted and budgeted per batch.
+func (b Builder) Build(ctx context.Context, changes change.ChangeSet, staticFindings []findings.Finding, relatedContext []ContextFile) ([]Batch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (b Builder) Build(ctx context.Context, changes change.ChangeSet, staticFind
 		if len(current) == 0 {
 			return
 		}
-		batches = append(batches, b.makeBatch(currentText, current, staticFindings))
+		batches = append(batches, b.makeBatch(currentText, current, staticFindings, relatedContext))
 		current = current[:0]
 		currentText = ""
 	}
@@ -135,7 +135,7 @@ func (b Builder) Build(ctx context.Context, changes change.ChangeSet, staticFind
 	return batches, nil
 }
 
-func (b Builder) makeBatch(diff string, fragments []fragment, staticFindings []findings.Finding) Batch {
+func (b Builder) makeBatch(diff string, fragments []fragment, staticFindings []findings.Finding, relatedContext []ContextFile) Batch {
 	files := make([]string, 0, len(fragments))
 	fileSet := make(map[string]struct{}, len(fragments))
 	truncated := false
@@ -148,11 +148,12 @@ func (b Builder) makeBatch(diff string, fragments []fragment, staticFindings []f
 	}
 
 	selected, omitted := selectFindings(staticFindings, fileSet, b.budget.MaxStaticFindingTokens)
+	batchContext := selectContext(fileSet, relatedContext)
 	redactionCount := 0
 	for _, value := range fragments {
 		redactionCount += value.redactionCount
 	}
-	request := newAnalysisRequest(b.instructions, diff, selected, redactionCount)
+	request := newAnalysisRequest(b.instructions, diff, selected, batchContext, redactionCount)
 	diffTokens := EstimateTokens(request.Diff())
 	estimated := b.instructionCost + diffTokens + estimateFindings(selected)
 	return Batch{
@@ -339,4 +340,43 @@ func estimateFindings(values []findings.Finding) int {
 		return 0
 	}
 	return EstimateTokens(string(encoded))
+}
+
+func selectContext(files map[string]struct{}, context []ContextFile) []ContextFile {
+	if len(context) == 0 {
+		return nil
+	}
+	selected := make([]ContextFile, 0, len(context))
+	total := 0
+	for _, candidate := range context {
+		if _, ok := files[candidate.Path]; !ok {
+			continue
+		}
+		content := truncateBytes(candidate.Content, MaxContextFileBytes)
+		remaining := MaxContextTotalBytes - total
+		if remaining <= len(contextTruncatedMarker) {
+			break
+		}
+		if len(content) > remaining {
+			content = truncateBytes(content, remaining)
+		}
+		total += len(content)
+		selected = append(selected, ContextFile{Path: candidate.Path, Content: content})
+	}
+	return selected
+}
+
+func truncateBytes(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	marker := contextTruncatedMarker
+	if len(marker) >= limit {
+		return marker[:limit]
+	}
+	cut := limit - len(marker)
+	for cut > 0 && !utf8.ValidString(value[:cut]) {
+		cut--
+	}
+	return value[:cut] + marker
 }

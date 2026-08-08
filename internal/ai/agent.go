@@ -36,8 +36,9 @@ func SelectAgents(ids []string) ([]ReviewAgent, error) {
 type AgentID string
 
 const (
-	AgentCorrectness AgentID = "correctness"
-	AgentSecurity    AgentID = "security"
+	AgentCorrectness    AgentID = "correctness"
+	AgentSecurity       AgentID = "security"
+	AgentSecurityTriage AgentID = "security-triage"
 )
 
 type ReviewAgent struct {
@@ -86,17 +87,23 @@ func DefaultAgents() []ReviewAgent {
 	}
 }
 
-func RouteAgents(changes change.ChangeSet, agents []ReviewAgent) []ReviewAgent {
-	routed := make([]ReviewAgent, 0, len(agents))
-	for _, agent := range agents {
-		if agent.ID == AgentCorrectness || (agent.ID == AgentSecurity && hasSecuritySignal(changes)) {
-			routed = append(routed, agent)
-		}
+// securityTriageInstructions drive the lightweight classifier that always
+// evaluates the redacted diff before deep security review is considered.
+const securityTriageInstructions = `You are a security triage classifier for staged code changes. Decide ONLY whether the supplied redacted diff plausibly introduces or expands an attack or abuse surface that warrants a deep security review. Consider authentication and authorization, credentials or secret handling, injection, command or process execution, network calls and SSRF, file or path handling, deserialization, cryptography, sensitive data exposure, permission changes, and missing rate limits or abuse controls. Answer escalate=true whenever such a surface is plausible or you are uncertain; answer escalate=false only when the change is clearly unrelated to security. Never report findings.`
+
+// securityTriageAgent is the internal cheap gate in front of the deep
+// security specialist. It produces a TriageResponse, not findings.
+func securityTriageAgent() ReviewAgent {
+	return ReviewAgent{
+		ID:           AgentSecurityTriage,
+		Instructions: securityTriageInstructions,
+		Categories:   map[findings.Category]struct{}{},
 	}
-	return routed
 }
 
-func hasSecuritySignal(changes change.ChangeSet) bool {
+// RequiresSecurityReview is the deterministic half of the deep-security gate:
+// runDeepSecurity = RequiresSecurityReview(changes) || securityTriage.Escalate.
+func RequiresSecurityReview(changes change.ChangeSet) bool {
 	for _, file := range changes.Files {
 		path := file.Path()
 		if containsSecurityTerm(path) || isSecuritySensitivePath(path) {

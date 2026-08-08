@@ -19,6 +19,7 @@ import (
 const (
 	defaultEndpoint        = "https://api.openai.com/v1/responses"
 	defaultMaxOutputTokens = 4096
+	triageMaxOutputTokens  = 512
 	maxResponseBytes       = 4 << 20
 )
 
@@ -77,15 +78,21 @@ func New(options Options) (*Provider, error) {
 }
 
 func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	return p.analyze(ctx, request)
+}
+
+func (p *Provider) analyze(ctx context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	input, err := json.Marshal(struct {
 		Diff           string             `json:"diff"`
 		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
+		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
 	}{
 		Diff:           request.Diff(),
 		StaticFindings: request.StaticFindings(),
+		RelatedContext: request.ContextFiles(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenAI review input: %w", err)
@@ -106,10 +113,74 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenAI request: %w", err)
 	}
+	outputText, err := p.post(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(outputText))
+	decoder.DisallowUnknownFields()
+	var analysis ai.AnalysisResponse
+	if err := decoder.Decode(&analysis); err != nil {
+		return nil, fmt.Errorf("decode OpenAI structured review: %w", err)
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return nil, err
+	}
+	return &analysis, nil
+}
 
+func (p *Provider) Triage(ctx context.Context, request ai.AnalysisRequest) (*ai.TriageResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	input, err := json.Marshal(struct {
+		Diff           string             `json:"diff"`
+		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
+		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
+	}{
+		Diff:           request.Diff(),
+		StaticFindings: request.StaticFindings(),
+		RelatedContext: request.ContextFiles(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenAI triage input: %w", err)
+	}
+	payload, err := json.Marshal(responsesRequest{
+		Model:           p.model,
+		Instructions:    request.Instructions(),
+		Input:           string(input),
+		Store:           false,
+		MaxOutputTokens: triageMaxOutputTokens,
+		Text: textConfig{Format: formatConfig{
+			Type:   "json_schema",
+			Name:   "code_review_triage",
+			Strict: true,
+			Schema: triageSchema(),
+		}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenAI triage request: %w", err)
+	}
+	outputText, err := p.post(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(outputText))
+	decoder.DisallowUnknownFields()
+	var triage ai.TriageResponse
+	if err := decoder.Decode(&triage); err != nil {
+		return nil, fmt.Errorf("decode OpenAI structured triage: %w", err)
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return nil, err
+	}
+	return &triage, nil
+}
+
+func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("create OpenAI request: %w", err)
+		return "", fmt.Errorf("create OpenAI request: %w", err)
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpRequest.Header.Set("Content-Type", "application/json")
@@ -118,22 +189,22 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	response, err := p.client.Do(httpRequest)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return "", ctxErr
 		}
-		return nil, fmt.Errorf("call OpenAI Responses API: %w", err)
+		return "", fmt.Errorf("call OpenAI Responses API: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := readBounded(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read OpenAI response: %w", err)
+		return "", fmt.Errorf("read OpenAI response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, apiError(response.StatusCode, body, p.apiKey)
+		return "", apiError(response.StatusCode, body, p.apiKey)
 	}
 
 	var envelope responsesEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("decode OpenAI response envelope: %w", err)
+		return "", fmt.Errorf("decode OpenAI response envelope: %w", err)
 	}
 	outputText := envelope.OutputText
 	if outputText == "" {
@@ -150,19 +221,9 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 		}
 	}
 	if strings.TrimSpace(outputText) == "" {
-		return nil, fmt.Errorf("OpenAI response contains no output text")
+		return "", fmt.Errorf("OpenAI response contains no output text")
 	}
-
-	decoder := json.NewDecoder(strings.NewReader(outputText))
-	decoder.DisallowUnknownFields()
-	var analysis ai.AnalysisResponse
-	if err := decoder.Decode(&analysis); err != nil {
-		return nil, fmt.Errorf("decode OpenAI structured review: %w", err)
-	}
-	if err := ensureJSONEnd(decoder); err != nil {
-		return nil, err
-	}
-	return &analysis, nil
+	return outputText, nil
 }
 
 type responsesRequest struct {
@@ -242,6 +303,34 @@ func responseSchema() map[string]any {
 						"confidence": map[string]any{"type": "number", "minimum": 0, "maximum": 1},
 					},
 				},
+			},
+		},
+	}
+}
+
+func triageSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"status", "escalate", "surfaces", "rationale"},
+		"properties": map[string]any{
+			"status": map[string]any{
+				"type": "string",
+				"enum": []string{string(ai.ResponseStatusComplete)},
+			},
+			"escalate": map[string]any{
+				"type": "boolean",
+			},
+			"surfaces": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":      "string",
+					"maxLength": 500,
+				},
+			},
+			"rationale": map[string]any{
+				"type":      "string",
+				"maxLength": 2000,
 			},
 		},
 	}

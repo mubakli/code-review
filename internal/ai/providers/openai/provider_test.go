@@ -208,7 +208,7 @@ func preparedRequest(t *testing.T, secret string) ai.AnalysisRequest {
 			},
 		}},
 	}}}
-	batches, err := builder.Build(context.Background(), changes, nil)
+	batches, err := builder.Build(context.Background(), changes, nil, nil)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -216,4 +216,52 @@ func preparedRequest(t *testing.T, secret string) ai.AnalysisRequest {
 		t.Fatalf("len(batches) = %d, want 1", len(batches))
 	}
 	return batches[0].Request
+}
+
+func TestProviderTriageProducesStructuredDecision(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		structured, err := json.Marshal(ai.TriageResponse{
+			Status:    ai.ResponseStatusComplete,
+			Escalate:  true,
+			Surfaces:  []string{"input handling", "command execution"},
+			Rationale: "User input reaches an exec call.",
+		})
+		if err != nil {
+			t.Fatalf("encode structured triage fixture: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"output_text": string(structured)})
+	}))
+	defer server.Close()
+
+	provider, err := New(Options{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	response, err := provider.Triage(context.Background(), preparedRequest(t, "test-secret"))
+	if err != nil {
+		t.Fatalf("Triage() error = %v", err)
+	}
+	if !response.Escalate || len(response.Surfaces) != 2 || response.Rationale != "User input reaches an exec call." {
+		t.Fatalf("triage response = %#v", response)
+	}
+}
+
+func TestProviderRejectsMalformedTriageOutput(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(map[string]any{"output_text": `{"status":"complete","escalate":true,"unexpected":true}`})
+	}))
+	defer server.Close()
+	provider, err := New(Options{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = provider.Triage(context.Background(), preparedRequest(t, "test-secret"))
+	if err == nil {
+		t.Fatal("Triage() error = nil for malformed output")
+	}
 }

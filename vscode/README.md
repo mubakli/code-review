@@ -56,17 +56,18 @@ working-tree source lines. Opening a reviewed file therefore shows the warning
 in the editor gutter and the readable provider/agent comment beside the code;
 the user does not need to navigate through the full Git diff first.
 
-AI findings identify the specialist that produced them. When selected,
-Correctness runs for every eligible staged change; Security runs only when the
-change contains security-relevant signals.
+AI findings identify the specialist that produced them. The security pipeline
+runs a lightweight triage on every change; deep review with related staged-file
+context is triggered only when an attack surface is detected. Findings use stable
+namespaced rule IDs and deterministic finding IDs.
 
-Findings use stable namespaced rule IDs and deterministic finding IDs. When an
-AI agent can produce an exact structured replacement, **Preview Suggested Fix**
-is available from the finding's lightbulb or Review Comments context menu. The
-preview compares the exact reviewed staged blob with the proposed result. Apply
-is always explicit and is refused if the staged snapshot changed, the path is
-unsafe, or the working-tree file differs from staged content. A successful apply
-creates an undoable unsaved editor change; it never saves or stages the file.
+When an AI agent can produce an exact structured replacement, **Preview
+Suggested Fix** is available from the finding's lightbulb or Review Comments
+context menu. The preview compares the exact reviewed staged blob with the
+proposed result. Apply is always explicit and is refused if the staged snapshot
+changed, the path is unsafe, or the working-tree file differs from staged
+content. A successful apply creates an undoable unsaved editor change; it never
+saves or stages the file.
 
 Use `codeReview.exclude` for additional repository-relative exclusion patterns.
 Automatic local review is controlled by `codeReview.autoReview` and

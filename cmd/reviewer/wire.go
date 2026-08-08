@@ -79,7 +79,7 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI review agents: %w", err)
 	}
-	orchestrator, err := ai.NewOrchestratorWithAgents(builder, provider, agents)
+	orchestrator, err := ai.NewOrchestratorWithAgentsAndResolver(builder, provider, agents, stagedContextResolver{repository})
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI orchestrator: %w", err)
 	}
@@ -155,4 +155,27 @@ func configuredProvider(providerConfig config.AI) (ai.Provider, error) {
 	default:
 		return nil, fmt.Errorf("unsupported enabled AI provider %q", providerConfig.Provider)
 	}
+}
+
+type stagedContextResolver struct {
+	repository *git.Repository
+}
+
+func (r stagedContextResolver) ResolveStagedContext(ctx context.Context, paths []string) ([]ai.ContextFile, error) {
+	matcher := pathfilter.New(pathfilter.DefaultAIEgressPatterns())
+	files := make([]ai.ContextFile, 0, len(paths))
+	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if matcher.Excludes(p) {
+			continue
+		}
+		content, err := r.repository.StagedFileContent(ctx, p)
+		if err != nil {
+			continue
+		}
+		files = append(files, ai.ContextFile{Path: p, Content: content})
+	}
+	return files, nil
 }

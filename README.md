@@ -55,10 +55,13 @@ provider only when AI review is explicitly enabled.
 
 AI review uses selectable specialist agents rather than one unrestricted prompt.
 When enabled, the correctness agent runs for every eligible staged change. The
-security agent runs only when changed paths or added lines contain deterministic
-security signals. Each agent receives the same redacted, budgeted diff pipeline; Go
-assigns the trusted `agentId`, filters out-of-scope categories, and merges likely
-duplicates before returning findings.
+security pipeline always evaluates a lightweight triage classifier on the
+redacted diff; the deep security specialist (with related staged-file context)
+is invoked only when deterministic signals or the triage decide to escalate.
+Escalation is fail-closed: any triage error triggers deep review. Each path
+receives the same redacted, budgeted diff pipeline; Go assigns the trusted
+`agentId`, filters out-of-scope categories, and merges likely duplicates before
+returning findings.
 
 Every finding carries a stable namespaced `ruleId` and a deterministic
 `findingId`. AI findings may also contain a bounded structured `proposedFix`

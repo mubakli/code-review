@@ -25,3 +25,12 @@ type ResponseFinding struct {
 	ProposedFix *findings.ProposedFix `json:"proposedFix"`
 	Confidence  float64               `json:"confidence"`
 }
+
+// TriageResponse is the lightweight security-triage decision. Triage never
+// produces findings; it only decides whether deep security review is needed.
+type TriageResponse struct {
+	Status    ResponseStatus `json:"status"`
+	Escalate  bool           `json:"escalate"`
+	Surfaces  []string       `json:"surfaces,omitempty"`
+	Rationale string         `json:"rationale,omitempty"`
+}

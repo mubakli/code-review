@@ -17,6 +17,7 @@ import (
 const (
 	maxRepositoryProbeBytes = 64 << 10
 	maxStagedDiffBytes      = 32 << 20
+	maxStagedFileBytes      = 1 << 20
 	maxGitStderrBytes       = 1 << 20
 )
 
@@ -24,6 +25,7 @@ var (
 	ErrNotRepository = errors.New("not a Git repository")
 	ErrDiffTooLarge  = errors.New("staged diff exceeds the 32 MiB safety limit")
 	errOutputLimit   = errors.New("Git output exceeds safety limit")
+	errInvalidPath   = errors.New("repository-relative path is invalid")
 )
 
 // Repository is a local Git worktree discovered from a starting directory.
@@ -83,8 +85,51 @@ func (r *Repository) StagedChanges(ctx context.Context) (change.ChangeSet, error
 	return snapshot.Changes, nil
 }
 
-// StagedSnapshot parses and identifies the exact deterministic patch read from
-// the index. Unstaged working-tree changes do not affect the identifier.
+// StagedFileContent reads the staged blob of a repository-relative file path.
+func (r *Repository) StagedFileContent(ctx context.Context, path string) (string, error) {
+	if err := validateRepoRelativePath(path); err != nil {
+		return "", err
+	}
+	output, stderr, err := run(
+		ctx,
+		r.root,
+		maxStagedFileBytes,
+		"-c", "core.quotePath=true",
+		"show",
+		"--no-textconv",
+		"--no-color",
+		":"+path,
+	)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		if errors.Is(err, errOutputLimit) {
+			return "", fmt.Errorf("staged file content for %s exceeds safety limit", path)
+		}
+		return "", commandError("read staged file content for "+path, stderr, err)
+	}
+	return string(output), nil
+}
+
+func validateRepoRelativePath(path string) error {
+	if path == "" || len(path) > 4096 {
+		return fmt.Errorf("%w: path must be non-empty and at most 4096 bytes", errInvalidPath)
+	}
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "-") {
+		return fmt.Errorf("%w: path must not be absolute or start with '-': %s", errInvalidPath, path)
+	}
+	if strings.ContainsRune(path, 0) {
+		return fmt.Errorf("%w: path must not contain NUL bytes", errInvalidPath)
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("%w: path must be a valid Git repository-relative file path", errInvalidPath)
+		}
+	}
+	return nil
+}
+
 func (r *Repository) StagedSnapshot(ctx context.Context) (StagedSnapshot, error) {
 	patch, err := r.stagedDiff(ctx)
 	if err != nil {

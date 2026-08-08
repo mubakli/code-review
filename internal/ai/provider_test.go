@@ -22,7 +22,7 @@ func TestAnalysisRequestRedactsAndCopiesInput(t *testing.T) {
 			Replacement: "safe",
 		},
 	}}
-	request := newAnalysisRequest("Review this diff.", `password = "`+secret+`"`, staticFindings, 0)
+	request := newAnalysisRequest("Review this diff.", `password = "`+secret+`"`, staticFindings, nil, 0)
 	staticFindings[0].Title = "mutated"
 	staticFindings[0].ProposedFix.Replacement = "mutated"
 
@@ -57,7 +57,7 @@ func TestAnalysisRequestJSONNeverContainsRawSecret(t *testing.T) {
 	t.Parallel()
 
 	secret := "provider-secret-value"
-	request := newAnalysisRequest("Review this diff.", `api_key: "`+secret+`"`, nil, 0)
+	request := newAnalysisRequest("Review this diff.", `api_key: "`+secret+`"`, nil, nil, 0)
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)

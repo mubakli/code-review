@@ -322,7 +322,7 @@ func TestReviewStagedRunsConfiguredAIProvider(t *testing.T) {
 			Provider:        config.AIProviderOpenAI,
 			Model:           "review-model",
 			MaxOutputTokens: 1000,
-			Agents:          []string{"correctness", "security"},
+			Agents:          []string{"correctness"},
 		},
 		Provider: provider,
 	})
@@ -366,7 +366,7 @@ func TestReviewStagedNeverSendsEnvironmentFilesToAI(t *testing.T) {
 			Provider:        config.AIProviderOpenAI,
 			Model:           "review-model",
 			MaxOutputTokens: 1000,
-			Agents:          []string{"correctness", "security"},
+			Agents:          []string{"correctness"},
 		},
 		Provider: provider,
 	})

@@ -276,12 +276,19 @@ may raise severity or confidence and fill a missing suggestion, but it does not
 replace the deterministic title, message, or source.
 
 Specialist review agents are provider-neutral values owned by `internal/ai`.
-`CorrectnessAgent` is always routed; `SecurityAgent` is routed only from
-deterministic changed-line/path signals. Every routed agent builds its own
-redacted, token-budgeted request batches. Provider output cannot choose its
-identity: orchestration assigns `agentId` after validating file membership,
-changed-line location, and the category allowlist for that agent. Findings from
-all agents then pass through the existing deterministic-primary deduplication.
+The correctness agent always reviews every eligible staged change. The security
+pipeline runs a lightweight triage classifier on every change and escalates to a
+deep security specialist only when deterministic keyword/path signals or the
+triage decision require it. Triage produces a binary `escalate` decision, never
+findings. The deep security specialist may receive related staged-file context
+resolved from the Git index (redacted and budgeted) to evaluate the full
+function or file surrounding the changed lines. Determined escalation is
+fail-closed: any triage provider or validation error triggers deep review.
+
+Provider output cannot choose its identity: orchestration assigns `agentId` after
+validating file membership, changed-line location, and the category allowlist.
+Findings from all agents then pass through the existing deterministic-primary
+deduplication.
 
 ## Wire Contracts
 
