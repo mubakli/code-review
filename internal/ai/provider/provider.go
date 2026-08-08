@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"code-review/internal/ai/request"
+	"code-review/internal/ai/routing"
 	"code-review/internal/findings"
 )
 
@@ -26,7 +27,7 @@ const (
 // model, and normalizes the raw response into the common structured form.
 type Provider interface {
 	Analyze(ctx stdcontext.Context, request request.AnalysisRequest) (*AnalysisResponse, error)
-	Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*TriageResponse, error)
+	Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*routing.SecurityAssessment, error)
 }
 
 type ResponseStatus string
@@ -51,16 +52,6 @@ type ResponseFinding struct {
 	Suggestion  string                `json:"suggestion"`
 	ProposedFix *findings.ProposedFix `json:"proposedFix"`
 	Confidence  float64               `json:"confidence"`
-}
-
-// TriageResponse is the normalized routing decision. Triage routes, it never
-// diagnoses: surfaces describe what the deep security agent must examine,
-// never confirmed vulnerabilities.
-type TriageResponse struct {
-	Status    ResponseStatus `json:"status"`
-	Escalate  bool           `json:"escalate"`
-	Surfaces  []string       `json:"surfaces,omitempty"`
-	Rationale string         `json:"rationale,omitempty"`
 }
 
 func readBounded(reader io.Reader) ([]byte, error) {

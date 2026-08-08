@@ -32,13 +32,21 @@ that routine adapter splits do not make this document stale:
   policies) and provider-neutral orchestration of prepare, build, execute,
   validate, and merge.
 - `internal/ai/routing` defines the deterministic signal contract
-  (`Signal`, `SignalKind`, `SecuritySurface`, `Confidence`, `SignalDetector`)
-  and the deduplicating `Aggregate` that policies consult before routing.
+  (`Signal`, `SignalKind`, `SecuritySurface`, `Confidence`, `SignalDetector`),
+  the deduplicating `Aggregate` that policies consult before routing, and the
+  tiny triage output `SecurityAssessment` (escalate, confidence, surfaces,
+  reasons) that the deep security agent consumes as routing context.
 - `internal/ai/routing/detectors` implements one detector per security domain
   (keyword, path, auth, network, database, filesystem, serialization,
   dependency, endpoint); each emits routing signals, never diagnosis.
+- `internal/ai/egress` gates what may leave the machine toward a provider:
+  `EgressRule{Pattern, Action}` with allow/redact/deny actions, applied
+  before any provider-visible content is prepared or sent.
 - `internal/ai/context` extracts, redacts, token-budgets, and batches a change
-  set into prepared context. It performs no provider calls.
+  set into prepared context. Its on-demand `ContextResolver` receives a
+  `ContextRequest{Symbols, Paths, Intent}` naming only the surrounding areas
+  (route, middleware, controller, service, repository, authorization,
+  ownership) an escalated review needs. It performs no provider calls.
 - `internal/ai/request` turns one prepared batch into a provider-neutral
   AnalysisRequest (final redaction pass, prompt attachment). It never talks to
   a network.
@@ -97,6 +105,9 @@ ai/routing/detectors
   -> ai/routing
   -> change
 
+ai/egress
+  -> change
+
 ai/request
   -> ai/context
   -> findings
@@ -104,6 +115,7 @@ ai/request
 
 ai/provider
   -> ai/request
+  -> ai/routing
   -> findings
   -> redact
 
@@ -245,14 +257,21 @@ Path and binary filtering first creates the immutable local review scope through
 including `.env` and `.env.*`, so deterministic secret detection still runs on
 sensitive configuration.
 
-The composition root applies a second, stricter AI egress policy before calling
-`ai.Orchestrator`. Environment files are removed from that provider-visible
-change set. The orchestrator's context preparer accepts the egress-safe set and
-retains defensive pathless and binary checks. This asymmetry is intentional:
-sensitive files
+The composition root applies a second, stricter egress policy before calling
+`ai.Orchestrator`. An `egress.Policy` built from allow/redact/deny rules
+(`.env`, `*.pem`, `*.key`, `secrets/**` deny; `*.config.json` redact;
+`src/**`, `tests/**` allow) removes denied files from the provider-visible
+change set, and the on-demand context resolver enforces the same policy for
+every related file it fetches. This asymmetry is intentional: sensitive files
 receive local analysis without leaving the machine.
 
 ## Privacy Boundary
+
+The provider pipeline is: Context Resolver -> Egress Policy -> Secret Redactor
+-> Token Budget -> Provider. The egress policy is the first gate: denied
+content never reaches preparation or a provider, redacted content is
+explicitly marked for secret redaction, and everything else still passes the
+redactor before any provider can observe it.
 
 Provider-visible requests have private fields and are created by the request
 builder from a prepared batch. Redaction happens before final token
@@ -321,16 +340,29 @@ require it. The deterministic half of the `SecurityEscalationPolicy` gate is a
 network, database, filesystem, serialization, dependency, endpoint) converts a
 change set into `Signal` values that name a security surface, a confidence, and
 a reason — routing, never diagnosis. Detectors ignore deleted lines, live in
-`internal/ai/routing`, and are stateless. Triage routes, it never diagnoses: its `surfaces`
-are observables from the diff that the deep agent must examine (data flows,
+`internal/ai/routing`, and are stateless.
+
+Triage routes, it never diagnoses. Its output is the tiny structured
+`routing.SecurityAssessment` (escalate, confidence, at most a few surfaces, at
+most a few short reasons) bounded to a few hundred tokens. `surfaces` are
+observables from the diff that the deep agent must examine (data flows,
 control-flow choices, changed boundaries) framed as areas to inspect — never
 confirmed vulnerabilities, because enforcement such as authorization middleware
-can live outside the diff. Its only decision is the binary `escalate`,
-recording no findings. The deep security specialist may receive related
-staged-file context resolved from the Git index (redacted and budgeted) to
-evaluate the full function or file surrounding the changed lines. Determined
-escalation is fail-closed: any triage provider or validation error triggers
-deep review.
+can live outside the diff. The same `SecurityAssessment` shape is produced on
+the deterministic signal path, so both escalation paths hand the deep agent
+identical routing context.
+
+The deep security agent consumes that assessment as input: the orchestrator
+appends a `Security escalation context` block (potential surfaces, why the
+review was escalated, "Investigate these areas first", and guidance not to
+assume a vulnerability solely because an authorization check is absent from
+the provided diff) to the agent's prompt. The agent may also receive related
+staged-file context, resolved on demand through `ContextResolver.Resolve`: the
+policy builds a `ContextRequest{Symbols, Paths, Intent}` from the assessment,
+so only the surrounding layer the dominant surface implies (route, middleware,
+controller, service, repository, authorization policy, ownership) is expanded
+from the Git index, redacted and budgeted. Escalation is fail-closed: any
+triage provider or validation error triggers deep review.
 
 Provider output cannot choose its identity: orchestration assigns `agentId` after
 validating file membership, changed-line location, and the category allowlist.

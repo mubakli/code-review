@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"code-review/internal/ai"
@@ -258,19 +259,98 @@ func TestSecurityEscalationPolicySkipsDeepReviewWhenRouterClears(t *testing.T) {
 	}
 }
 
+func TestSecurityEscalationPolicyCarriesAssessmentIntoDecision(t *testing.T) {
+	t.Parallel()
+
+	scope := &fakePolicyScope{t: t, routerEscalate: true}
+	changes := addedFile("service.go", []string{"return result"})
+	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if decision.Assessment == nil || !decision.Assessment.Escalate {
+		t.Fatalf("decision has no escalated assessment: %#v", decision.Assessment)
+	}
+	if len(decision.Assessment.Surfaces) != 1 || decision.Assessment.Surfaces[0] != routing.SurfaceAuthorization {
+		t.Fatalf("assessment surfaces = %#v", decision.Assessment.Surfaces)
+	}
+	if len(decision.Assessment.Reasons) != 1 {
+		t.Fatalf("assessment reasons = %#v", decision.Assessment.Reasons)
+	}
+}
+
+func TestSecurityEscalationPolicyRequestsIntentAwareContext(t *testing.T) {
+	t.Parallel()
+
+	scope := &fakePolicyScope{t: t, routerEscalate: true}
+	changes := addedFile("service.go", []string{"return result"})
+	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
+	if _, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope); err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if scope.lastRequest.Intent != aicontext.ContextIntentAuthorization {
+		t.Fatalf("context request intent = %q, want authorization", scope.lastRequest.Intent)
+	}
+	if len(scope.lastRequest.Paths) != 1 || scope.lastRequest.Paths[0] != "service.go" {
+		t.Fatalf("context request paths = %#v", scope.lastRequest.Paths)
+	}
+}
+
+func TestSecurityEscalationContextRendersSurfacesAndGuidance(t *testing.T) {
+	t.Parallel()
+
+	rendered := ai.SecurityEscalationContext(&routing.SecurityAssessment{
+		Escalate:   true,
+		Confidence: routing.ConfidenceHigh,
+		Surfaces:   []routing.SecuritySurface{routing.SurfaceAuthorization},
+		Reasons:    []string{"the surface awaits confirmation"},
+	})
+	for _, expected := range []string{
+		"Security escalation context:",
+		"Potential surfaces:",
+		"- " + string(routing.SurfaceAuthorization),
+		"Why this review was escalated:",
+		"the surface awaits confirmation",
+		"Investigate these areas first.",
+		"Do not assume a vulnerability solely because an authorization check is absent from the provided diff.",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered context is missing %q:\n%s", expected, rendered)
+		}
+	}
+	if rendered := ai.SecurityEscalationContext(nil); rendered != "" {
+		t.Fatalf("SecurityEscalationContext(nil) = %q, want empty", rendered)
+	}
+}
+
 type fakePolicyScope struct {
 	t               *testing.T
 	routerEscalate  bool
 	routerRuns      int
 	contextResolves int
+	lastRequest     aicontext.ContextRequest
+	assessment      *routing.SecurityAssessment
 }
 
-func (s *fakePolicyScope) RunRouter(context.Context, ai.AgentSpec, change.ChangeSet, []findings.Finding, *ai.ReviewResult, *int) (bool, error) {
+func (s *fakePolicyScope) RunRouter(context.Context, ai.AgentSpec, change.ChangeSet, []findings.Finding, *ai.ReviewResult, *int) (*routing.SecurityAssessment, error) {
 	s.routerRuns++
-	return s.routerEscalate, nil
+	if !s.routerEscalate {
+		return nil, nil
+	}
+	if s.assessment != nil {
+		return s.assessment, nil
+	}
+	return &routing.SecurityAssessment{
+		Escalate:   true,
+		Confidence: routing.ConfidenceMedium,
+		Surfaces:   []routing.SecuritySurface{routing.SurfaceAuthorization},
+		Reasons:    []string{"the surface awaits confirmation"},
+	}, nil
 }
 
-func (s *fakePolicyScope) ResolveStagedContext(_ context.Context, changes change.ChangeSet) ([]aicontext.ContextFile, error) {
+func (s *fakePolicyScope) ResolveContext(_ context.Context, changes change.ChangeSet, request aicontext.ContextRequest) (aicontext.RepositoryContext, error) {
 	s.contextResolves++
-	return []aicontext.ContextFile{{Path: changes.Files[0].Path(), Content: "staged content"}}, nil
+	s.lastRequest = request
+	return aicontext.RepositoryContext{Files: []aicontext.ContextFile{{Path: changes.Files[0].Path(), Content: "staged content"}}}, nil
 }

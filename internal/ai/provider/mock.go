@@ -5,13 +5,14 @@ import (
 	"fmt"
 
 	"code-review/internal/ai/request"
+	"code-review/internal/ai/routing"
 )
 
 // Mock is the test double for Provider. Unconfigured function fields default
 // to a benign triage-clear response; AnalyzeFunc is required.
 type Mock struct {
 	AnalyzeFunc func(stdcontext.Context, request.AnalysisRequest) (*AnalysisResponse, error)
-	TriageFunc  func(stdcontext.Context, request.AnalysisRequest) (*TriageResponse, error)
+	TriageFunc  func(stdcontext.Context, request.AnalysisRequest) (*routing.SecurityAssessment, error)
 }
 
 var _ Provider = Mock{}
@@ -23,9 +24,12 @@ func (p Mock) Analyze(ctx stdcontext.Context, request request.AnalysisRequest) (
 	return p.AnalyzeFunc(ctx, request)
 }
 
-func (p Mock) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*TriageResponse, error) {
+func (p Mock) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*routing.SecurityAssessment, error) {
 	if p.TriageFunc == nil {
-		return &TriageResponse{Status: ResponseStatusComplete, Escalate: false}, nil
+		return &routing.SecurityAssessment{
+			Escalate:   false,
+			Confidence: routing.ConfidenceLow,
+		}, nil
 	}
 	return p.TriageFunc(ctx, request)
 }

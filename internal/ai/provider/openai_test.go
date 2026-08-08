@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"code-review/internal/ai/routing"
 	"code-review/internal/findings"
 	"code-review/internal/redact"
 )
@@ -190,11 +191,11 @@ func TestOpenAITriageProducesStructuredDecision(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		structured, err := json.Marshal(TriageResponse{
-			Status:    ResponseStatusComplete,
-			Escalate:  true,
-			Surfaces:  []string{"input handling", "command execution"},
-			Rationale: "User input reaches an exec call.",
+		structured, err := json.Marshal(routing.SecurityAssessment{
+			Escalate:   true,
+			Confidence: routing.ConfidenceHigh,
+			Surfaces:   []routing.SecuritySurface{"input handling", "command-execution"},
+			Reasons:    []string{"User input reaches an exec call."},
 		})
 		if err != nil {
 			t.Fatalf("encode structured triage fixture: %v", err)
@@ -212,7 +213,7 @@ func TestOpenAITriageProducesStructuredDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Triage() error = %v", err)
 	}
-	if !response.Escalate || len(response.Surfaces) != 2 || response.Rationale != "User input reaches an exec call." {
+	if !response.Escalate || response.Confidence != routing.ConfidenceHigh || len(response.Surfaces) != 2 || len(response.Reasons) != 1 {
 		t.Fatalf("triage response = %#v", response)
 	}
 }
@@ -221,7 +222,7 @@ func TestOpenAIRejectsMalformedTriageOutput(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(writer).Encode(map[string]any{"output_text": `{"status":"complete","escalate":true,"unexpected":true}`})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"output_text": `{"escalate":true,"confidence":"high","unexpected":true}`})
 	}))
 	defer server.Close()
 	instance, err := NewOpenAI(OpenAIOptions{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})

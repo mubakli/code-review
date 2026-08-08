@@ -12,6 +12,7 @@ import (
 
 	"code-review/internal/ai/context"
 	"code-review/internal/ai/request"
+	"code-review/internal/ai/routing"
 	"code-review/internal/findings"
 )
 
@@ -117,7 +118,7 @@ func (p *OpenAI) Analyze(ctx stdcontext.Context, request request.AnalysisRequest
 	return &analysis, nil
 }
 
-func (p *OpenAI) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*TriageResponse, error) {
+func (p *OpenAI) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*routing.SecurityAssessment, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -151,14 +152,14 @@ func (p *OpenAI) Triage(ctx stdcontext.Context, request request.AnalysisRequest)
 	}
 	decoder := json.NewDecoder(strings.NewReader(outputText))
 	decoder.DisallowUnknownFields()
-	var triage TriageResponse
-	if err := decoder.Decode(&triage); err != nil {
+	var assessment routing.SecurityAssessment
+	if err := decoder.Decode(&assessment); err != nil {
 		return nil, fmt.Errorf("decode OpenAI structured triage: %w", err)
 	}
 	if err := ensureJSONEnd(decoder, "OpenAI"); err != nil {
 		return nil, err
 	}
-	return &triage, nil
+	return &assessment, nil
 }
 
 func (p *OpenAI) post(ctx stdcontext.Context, payload []byte) (string, error) {
@@ -302,27 +303,32 @@ func triageSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"status", "escalate", "surfaces", "rationale"},
+		"required":             []string{"escalate", "confidence", "surfaces", "reasons"},
 		"properties": map[string]any{
-			"status": map[string]any{
-				"type": "string",
-				"enum": []string{string(ResponseStatusComplete)},
-			},
 			"escalate": map[string]any{
-				"type": "boolean",
+				"type":        "boolean",
+				"description": "True when the deep security agent must examine the change.",
+			},
+			"confidence": map[string]any{
+				"type":        "string",
+				"enum":        []string{"high", "medium", "low"},
+				"description": "How strongly the diff points at a security surface.",
 			},
 			"surfaces": map[string]any{
 				"type":        "array",
-				"description": "Observables from the diff the deep security agent must examine (data flows, control-flow choices, changed boundaries) as areas to inspect; never confirmed vulnerabilities.",
+				"description": "Observables from the diff the deep security agent must examine (data flows, control-flow choices, changed boundaries) as areas to inspect; never confirmed vulnerabilities. Keep this list small (1-3 entries).",
 				"items": map[string]any{
 					"type":      "string",
 					"maxLength": 500,
 				},
 			},
-			"rationale": map[string]any{
-				"type":        "string",
-				"description": "Why deep analysis is warranted, noting when enforcement may live outside this diff; never a vulnerability claim.",
-				"maxLength":   2000,
+			"reasons": map[string]any{
+				"type":        "array",
+				"description": "Why deep analysis is warranted, noting when enforcement may live outside this diff; never a vulnerability claim. Keep this list small (1-2 entries).",
+				"items": map[string]any{
+					"type":      "string",
+					"maxLength": 300,
+				},
 			},
 		},
 	}

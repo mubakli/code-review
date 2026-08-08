@@ -32,20 +32,6 @@ func TestDefaultMatcher(t *testing.T) {
 	}
 }
 
-func TestDefaultAIEgressMatcher(t *testing.T) {
-	t.Parallel()
-
-	matcher := New(DefaultAIEgressPatterns())
-	for _, file := range []string{".env", ".env.local", "config/.env.production", ".env.example"} {
-		if !matcher.Excludes(file) {
-			t.Errorf("AI egress matcher did not exclude %q", file)
-		}
-	}
-	if matcher.Excludes("config/environment.go") {
-		t.Fatal("AI egress matcher excluded a normal source file")
-	}
-}
-
 func TestMatcherSupportsRepositoryRelativeDirectoryAndGlob(t *testing.T) {
 	t.Parallel()
 

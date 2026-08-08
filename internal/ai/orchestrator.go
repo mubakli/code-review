@@ -3,11 +3,11 @@ package ai
 import (
 	stdcontext "context"
 	"fmt"
-	"strings"
 
 	"code-review/internal/ai/context"
 	"code-review/internal/ai/provider"
 	"code-review/internal/ai/request"
+	"code-review/internal/ai/routing"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
@@ -95,7 +95,7 @@ func (o *Orchestrator) Review(ctx stdcontext.Context, changes change.ChangeSet, 
 		if !decision.Run {
 			continue
 		}
-		v, idx, err := o.runAnalyzer(ctx, changes, localFindings, eligibleLines, agent, decision.Context, &result, batchIndex)
+		v, idx, err := o.runAnalyzer(ctx, changes, localFindings, eligibleLines, agent, decision.Context, decision.Assessment, &result, batchIndex)
 		if err != nil {
 			return result, err
 		}
@@ -108,67 +108,75 @@ func (o *Orchestrator) Review(ctx stdcontext.Context, changes change.ChangeSet, 
 }
 
 // RunRouter executes a router agent and records its activity. Router errors
-// escalate (fail-closed): policies may treat the return value as their gate.
-func (o *Orchestrator) RunRouter(ctx stdcontext.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (bool, error) {
+// escalate (fail-closed): a failed router returns an escalated assessment so
+// policies send the change to the deep security agent regardless.
+func (o *Orchestrator) RunRouter(ctx stdcontext.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (*routing.SecurityAssessment, error) {
 	if spec.Role != RoleRouter {
-		return false, fmt.Errorf("agent %q has role %q and cannot route", spec.ID, spec.Role)
+		return nil, fmt.Errorf("agent %q has role %q and cannot route", spec.ID, spec.Role)
 	}
 	prepared, err := o.preparer.Prepare(ctx, changes, staticFindings, nil, spec.Prompt)
 	if err != nil {
 		result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, nil, err))
-		return true, nil // fail closed
+		return &routing.SecurityAssessment{Escalate: true, Confidence: routing.ConfidenceLow}, nil // fail closed
 	}
 	if len(prepared.Batches) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	result.Agents = append(result.Agents, string(spec.ID))
 	result.BatchCount += len(prepared.Batches)
-	escalate := false
+	var escalated *routing.SecurityAssessment
 	for _, batch := range prepared.Batches {
 		if err := ctx.Err(); err != nil {
-			return escalate, nil
+			return escalated, nil
 		}
 		result.ReviewedFiles = appendUnique(result.ReviewedFiles, batch.Files...)
 		analysisRequest, err := o.builder.Build(batch, spec.Prompt)
 		if err != nil {
 			result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, batch.Files, err))
 			*batchIndex++
-			escalate = true
+			escalated = &routing.SecurityAssessment{Escalate: true, Confidence: routing.ConfidenceLow}
 			continue
 		}
 		response, err := o.provider.Triage(ctx, analysisRequest)
 		if err != nil {
 			result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, batch.Files, err))
 			*batchIndex++
-			escalate = true
+			escalated = &routing.SecurityAssessment{Escalate: true, Confidence: routing.ConfidenceLow}
 			continue
 		}
-		if err := validateTriageResponse(response); err != nil {
+		if err := validateAssessment(response); err != nil {
 			result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, batch.Files, err))
 			*batchIndex++
-			escalate = true
+			escalated = &routing.SecurityAssessment{Escalate: true, Confidence: routing.ConfidenceLow}
 			continue
 		}
 		result.SuccessfulBatches++
 		*batchIndex++
 		if response.Escalate {
-			escalate = true
+			escalated = routing.MergeAssessments(escalated, response)
 		}
 	}
-	return escalate, nil
+	return escalated, nil
 }
 
-// ResolveStagedContext supplies related staged file content for deep
-// specialist review. It is advisory: failures yield no context, never errors.
-func (o *Orchestrator) ResolveStagedContext(ctx stdcontext.Context, changes change.ChangeSet) ([]context.ContextFile, error) {
+// ResolveContext supplies related staged code for deep specialist review, on
+// demand: the request names only the areas the escalated surfaces point at.
+// It is advisory: failures yield no context, never errors.
+func (o *Orchestrator) ResolveContext(ctx stdcontext.Context, changes change.ChangeSet, request context.ContextRequest) (context.RepositoryContext, error) {
 	if o.resolver == nil {
-		return nil, nil
+		return context.RepositoryContext{}, nil
 	}
-	return o.resolver.ResolveStagedContext(ctx, contextPaths(changes))
+	return o.resolver.Resolve(ctx, changes, request)
 }
 
-func (o *Orchestrator) runAnalyzer(ctx stdcontext.Context, changes change.ChangeSet, localFindings []findings.Finding, eligibleLines map[string]map[int]struct{}, agent AgentSpec, relatedContext []context.ContextFile, result *ReviewResult, batchIndex int) ([]findings.Finding, int, error) {
-	prepared, err := o.preparer.Prepare(ctx, changes, localFindings, relatedContext, agent.Prompt)
+func (o *Orchestrator) runAnalyzer(ctx stdcontext.Context, changes change.ChangeSet, localFindings []findings.Finding, eligibleLines map[string]map[int]struct{}, agent AgentSpec, relatedContext []context.ContextFile, assessment *routing.SecurityAssessment, result *ReviewResult, batchIndex int) ([]findings.Finding, int, error) {
+	// The deep security agent consumes the triage routing context as input:
+	// which surfaces to examine first and why the review was escalated.
+	prompt := agent.Prompt
+	if escalationContext := SecurityEscalationContext(assessment); escalationContext != "" {
+		prompt += escalationContext
+	}
+	prepared, err := o.preparer.Prepare(ctx, changes, localFindings, relatedContext, prompt)
 	if err != nil {
 		return nil, batchIndex, fmt.Errorf("prepare %s agent context: %w", agent.ID, err)
 	}
@@ -179,7 +187,7 @@ func (o *Orchestrator) runAnalyzer(ctx stdcontext.Context, changes change.Change
 			return aiFindings, batchIndex, err
 		}
 		result.ReviewedFiles = appendUnique(result.ReviewedFiles, batch.Files...)
-		analysisRequest, err := o.builder.Build(batch, agent.Prompt)
+		analysisRequest, err := o.builder.Build(batch, prompt)
 		if err != nil {
 			return nil, batchIndex, fmt.Errorf("build %s agent request: %w", agent.ID, err)
 		}
@@ -206,36 +214,15 @@ func (o *Orchestrator) runAnalyzer(ctx stdcontext.Context, changes change.Change
 	return aiFindings, batchIndex, nil
 }
 
-func contextPaths(changes change.ChangeSet) []string {
-	paths := make([]string, 0, len(changes.Files))
-	for _, file := range changes.Files {
-		if file.Binary || file.Status == change.StatusDeleted {
-			continue
-		}
-		if path := file.Path(); path != "" {
-			paths = append(paths, path)
-		}
+func validateAssessment(assessment *routing.SecurityAssessment) error {
+	if err := assessment.Validate(); err != nil {
+		return err
 	}
-	return paths
-}
-
-func validateTriageResponse(response *provider.TriageResponse) error {
-	if response == nil {
-		return fmt.Errorf("provider returned an empty triage response")
+	if assessment.Escalate {
+		return nil
 	}
-	if response.Status != provider.ResponseStatusComplete {
-		return fmt.Errorf("unsupported triage response status %q", response.Status)
-	}
-	if len(response.Surfaces) > 20 {
-		return fmt.Errorf("triage surfaces exceed 20-entry limit")
-	}
-	for i, surface := range response.Surfaces {
-		if len(surface) > 500 || strings.IndexByte(surface, 0) >= 0 {
-			return fmt.Errorf("triage surface %d is invalid", i+1)
-		}
-	}
-	if len(response.Rationale) > 2000 || strings.IndexByte(response.Rationale, 0) >= 0 {
-		return fmt.Errorf("triage rationale is invalid")
+	if len(assessment.Surfaces) > 0 || len(assessment.Reasons) > 0 {
+		return fmt.Errorf("triage assessment must not carry surfaces or reasons when escalate is false")
 	}
 	return nil
 }

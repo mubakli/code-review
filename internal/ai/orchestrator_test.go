@@ -10,6 +10,7 @@ import (
 	aicontext "code-review/internal/ai/context"
 	"code-review/internal/ai/provider"
 	"code-review/internal/ai/request"
+	"code-review/internal/ai/routing"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 	"code-review/internal/redact"
@@ -251,7 +252,7 @@ func TestSecurityPipelineSkipsRouterOnDeterministicSignal(t *testing.T) {
 		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 			return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 		},
-		TriageFunc: func(context.Context, request.AnalysisRequest) (*provider.TriageResponse, error) {
+		TriageFunc: func(context.Context, request.AnalysisRequest) (*routing.SecurityAssessment, error) {
 			triageCalled = true
 			t.Fatal("triage router ran despite a deterministic security signal")
 			return nil, nil
@@ -306,16 +307,28 @@ func TestSecurityPipelineEscalatesOnTriageDecision(t *testing.T) {
 	changes := addedFile("service.go", []string{"return result"})
 	securityCalled := false
 	provider := provider.Mock{
-		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
+		AnalyzeFunc: func(_ context.Context, request request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 			securityCalled = true
+			for _, expected := range []string{
+				"Security escalation context:",
+				"Potential surfaces:",
+				"- injection",
+				"user-controlled input reaches a database query built by string concatenation",
+				"Investigate these areas first.",
+				"Do not assume a vulnerability solely because an authorization check is absent from the provided diff.",
+			} {
+				if !strings.Contains(request.Instructions(), expected) {
+					t.Fatalf("deep security instructions are missing %q:\n%s", expected, request.Instructions())
+				}
+			}
 			return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 		},
-		TriageFunc: func(context.Context, request.AnalysisRequest) (*provider.TriageResponse, error) {
-			return &provider.TriageResponse{
-				Status:    provider.ResponseStatusComplete,
-				Escalate:  true,
-				Surfaces:  []string{"user-controlled input reaches a database query built by string concatenation"},
-				Rationale: "The surface awaits confirmation; enforcement such as authorization middleware may live outside this diff.",
+		TriageFunc: func(context.Context, request.AnalysisRequest) (*routing.SecurityAssessment, error) {
+			return &routing.SecurityAssessment{
+				Escalate:   true,
+				Confidence: routing.ConfidenceMedium,
+				Surfaces:   []routing.SecuritySurface{"injection"},
+				Reasons:    []string{"user-controlled input reaches a database query built by string concatenation"},
 			}, nil
 		},
 	}
@@ -347,7 +360,7 @@ func TestSecurityPipelineFailClosedOnTriageError(t *testing.T) {
 			securityCalled = true
 			return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 		},
-		TriageFunc: func(context.Context, request.AnalysisRequest) (*provider.TriageResponse, error) {
+		TriageFunc: func(context.Context, request.AnalysisRequest) (*routing.SecurityAssessment, error) {
 			return nil, errors.New("triage provider unavailable")
 		},
 	}

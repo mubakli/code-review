@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"code-review/internal/ai/request"
+	"code-review/internal/ai/routing"
 )
 
 const deepSeekEndpoint = "https://api.deepseek.com/chat/completions"
@@ -115,7 +116,7 @@ func (p *DeepSeek) Analyze(ctx stdcontext.Context, request request.AnalysisReque
 	return &analysis, nil
 }
 
-func (p *DeepSeek) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*TriageResponse, error) {
+func (p *DeepSeek) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*routing.SecurityAssessment, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -146,14 +147,14 @@ func (p *DeepSeek) Triage(ctx stdcontext.Context, request request.AnalysisReques
 	}
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
-	var triage TriageResponse
-	if err := decoder.Decode(&triage); err != nil {
+	var assessment routing.SecurityAssessment
+	if err := decoder.Decode(&assessment); err != nil {
 		return nil, fmt.Errorf("decode DeepSeek structured triage: %w", err)
 	}
 	if err := ensureJSONEnd(decoder, "DeepSeek"); err != nil {
 		return nil, err
 	}
-	return &triage, nil
+	return &assessment, nil
 }
 
 func (p *DeepSeek) post(ctx stdcontext.Context, payload []byte) (string, error) {
@@ -192,7 +193,7 @@ func (p *DeepSeek) post(ctx stdcontext.Context, payload []byte) (string, error) 
 
 const structuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"status":"complete","findings":[{"file":"relative/path","startLine":1,"endLine":1,"severity":"critical|high|medium|low|info","category":"security|correctness|performance|database|maintainability|quality","title":"short title","message":"evidence-based explanation","suggestion":"concise remediation or empty string","proposedFix":null,"confidence":0.0}]}. Every finding must include proposedFix as null or {"description":"nonblank description","startLine":1,"endLine":1,"replacement":"complete replacement text without diff prefixes"}. A proposed fix replaces complete lines, its range must exactly equal the finding range, and every line in both ranges must be an added diff line. Use null unless an exact safe replacement is possible. Never use redaction or truncation placeholders in replacement text. Do not return ruleId or findingId; those are assigned by the reviewer. Use an empty findings array when no issue exists.`
 
-const triageStructuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"status":"complete","escalate":true,"surfaces":["user-controlled input reaches a database query built by string concatenation"],"rationale":"The surface awaits confirmation: the surrounding enforcement may live outside this diff"}. This is a routing decision, not a diagnosis: never claim that a vulnerability exists or is absent. surfaces is an array of short labels describing what the deep security agent must examine, phrased as observables from this diff (data flows, control-flow choices, changed boundaries); never label them as confirmed flaws. rationale states in at most two sentences why deep analysis is warranted, noting that enforcement may live outside the diff when relevant. escalate must be true whenever such a surface is plausible, including when you are uncertain or enforcement is elsewhere; escalate must be false only when the change is clearly unrelated to security.`
+const triageStructuredOutputInstructions = ` Return exactly one JSON object with this shape and no markdown: {"escalate":true,"confidence":"high|medium|low","surfaces":["user-controlled-input reaches a database query built by string concatenation"],"reasons":["The surface awaits confirmation: the surrounding enforcement may live outside this diff"]}. Keep the payload tiny: at most 3 short surfaces and 2 short reasons. This is a routing decision, not a diagnosis: never claim that a vulnerability exists or is absent. surfaces is an array of short labels describing what the deep security agent must examine, phrased as observables from this diff (data flows, control-flow choices, changed boundaries); never label them as confirmed flaws. reasons states in at most two short sentences why deep analysis is warranted, noting that enforcement may live outside the diff when relevant. escalate must be true whenever such a surface is plausible, including when you are uncertain or enforcement is elsewhere; escalate must be false only when the change is clearly unrelated to security.`
 
 type chatRequest struct {
 	Model           string         `json:"model"`

@@ -130,6 +130,22 @@ func validateRepoRelativePath(path string) error {
 	return nil
 }
 
+// TrackedFiles returns the repository-relative paths of every file tracked in
+// the index. Used by context resolvers to expand related code on demand.
+func (r *Repository) TrackedFiles(ctx context.Context) ([]string, error) {
+	output, stderr, err := run(ctx, r.root, maxStagedDiffBytes, "ls-files", "--cached", "-z")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, commandError("list tracked files", stderr, err)
+	}
+	if len(output) == 0 {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00"), nil
+}
+
 func (r *Repository) StagedSnapshot(ctx context.Context) (StagedSnapshot, error) {
 	patch, err := r.stagedDiff(ctx)
 	if err != nil {

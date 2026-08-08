@@ -41,15 +41,16 @@ type RoutingPolicy interface {
 
 // Decision is the declarative output of a routing policy.
 type Decision struct {
-	Run     bool
-	Context []context.ContextFile
+	Run        bool
+	Context    []context.ContextFile
+	Assessment *routing.SecurityAssessment
 }
 
 // PolicyScope is the capability surface policies may use to route and to
 // resolve related staged context for a deep specialist review.
 type PolicyScope interface {
-	RunRouter(ctx stdcontext.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (bool, error)
-	ResolveStagedContext(ctx stdcontext.Context, changes change.ChangeSet) ([]context.ContextFile, error)
+	RunRouter(ctx stdcontext.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (*routing.SecurityAssessment, error)
+	ResolveContext(ctx stdcontext.Context, changes change.ChangeSet, request context.ContextRequest) (context.RepositoryContext, error)
 }
 
 // AlwaysRun routes every eligible change to its agent.
@@ -73,36 +74,138 @@ type SecurityEscalationPolicy struct {
 }
 
 func (p SecurityEscalationPolicy) ShouldRun(ctx stdcontext.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error) {
-	if hasDeterministicSignal(p.Detector, changes) {
-		return Decision{Run: true}, nil
+	assessment := assessmentFromSignals(p.detectSignals(changes))
+	if assessment == nil {
+		router := p.Router
+		if router.ID == "" {
+			router = SecurityTriageRouter
+		}
+		var err error
+		assessment, err = scope.RunRouter(ctx, router, changes, staticFindings, result, batchIndex)
+		if err != nil {
+			return Decision{}, err
+		}
+		if assessment == nil || !assessment.Escalate {
+			return Decision{}, nil
+		}
 	}
-	router := p.Router
-	if router.ID == "" {
-		router = SecurityTriageRouter
-	}
-	escalate, err := scope.RunRouter(ctx, router, changes, staticFindings, result, batchIndex)
+	contextFiles, err := scope.ResolveContext(ctx, changes, contextRequestForAssessment(changes, assessment))
 	if err != nil {
-		return Decision{}, err
+		contextFiles = context.RepositoryContext{} // related context is advisory; the diff review proceeds
 	}
-	if !escalate {
-		return Decision{}, nil
-	}
-	contextFiles, err := scope.ResolveStagedContext(ctx, changes)
-	if err != nil {
-		contextFiles = nil // related context is advisory; the diff review proceeds
-	}
-	return Decision{Run: true, Context: contextFiles}, nil
+	return Decision{Run: true, Context: contextFiles.Files, Assessment: assessment}, nil
 }
 
-// hasDeterministicSignal reports whether an injected detector (or the default
-// detector aggregate) found any security signal in the change set. Signal
+// detectSignals returns the deterministic security signals for a change set,
+// consulting the injected detector or the default detector aggregate. Signal
 // detection is conservative: over-triggering costs tokens, under-triggering
 // silently loses security coverage.
-func hasDeterministicSignal(detector routing.SignalDetector, changes change.ChangeSet) bool {
+func (p SecurityEscalationPolicy) detectSignals(changes change.ChangeSet) []routing.Signal {
+	detector := p.Detector
 	if detector == nil {
 		detector = defaultSecurityDetectors
 	}
-	return len(detector.Detect(changes)) > 0
+	return detector.Detect(changes)
+}
+
+// assessmentFromSignals turns deterministic signals into the same tiny
+// routing assessment the triage router produces, so both escalation paths
+// hand the deep security agent identical routing context.
+func assessmentFromSignals(signals []routing.Signal) *routing.SecurityAssessment {
+	if len(signals) == 0 {
+		return nil
+	}
+	assessment := &routing.SecurityAssessment{Escalate: true, Confidence: routing.ConfidenceLow}
+	seen := make(map[routing.SecuritySurface]struct{}, len(signals))
+	for _, signal := range signals {
+		if _, exists := seen[signal.Surface]; exists {
+			continue
+		}
+		seen[signal.Surface] = struct{}{}
+		assessment.Surfaces = append(assessment.Surfaces, signal.Surface)
+		if confidenceRank(signal.Confidence) > confidenceRank(assessment.Confidence) {
+			assessment.Confidence = signal.Confidence
+		}
+	}
+	for _, signal := range signals {
+		if len(assessment.Reasons) >= 5 {
+			break
+		}
+		assessment.Reasons = append(assessment.Reasons, signal.Reason)
+	}
+	return assessment
+}
+
+// contextRequestForAssessment asks the context resolver for only the areas an
+// escalated assessment points at: the changed paths plus the surrounding layer
+// the dominant surface implies.
+func contextRequestForAssessment(changes change.ChangeSet, assessment *routing.SecurityAssessment) context.ContextRequest {
+	return context.ContextRequest{
+		Paths:  changePaths(changes),
+		Intent: intentForAssessment(assessment),
+	}
+}
+
+// intentForAssessment picks the surrounding layer the dominant escalated
+// surface implies, so context is resolved on demand instead of bundled
+// blindly. An empty intent means only changed paths are resolved.
+func intentForAssessment(assessment *routing.SecurityAssessment) context.ContextIntent {
+	if assessment == nil {
+		return ""
+	}
+	for _, surface := range assessment.Surfaces {
+		if intent, known := surfaceIntent[surface]; known {
+			return intent
+		}
+	}
+	return ""
+}
+
+// surfaceIntent relates each known security surface to the surrounding layer
+// whose code is most likely to enforce or confirm the surface: authorization
+// surfaces point at authorization policies, injection surfaces at the data
+// layer, and so on.
+var surfaceIntent = map[routing.SecuritySurface]context.ContextIntent{
+	routing.SurfaceAuthorization:    context.ContextIntentAuthorization,
+	routing.SurfaceAuthentication:   context.ContextIntentMiddleware,
+	routing.SurfaceCredentials:      context.ContextIntentMiddleware,
+	routing.SurfaceInjection:        context.ContextIntentRepository,
+	routing.SurfaceCommandExecution: context.ContextIntentService,
+	routing.SurfaceNetwork:          context.ContextIntentRoute,
+	routing.SurfaceFilesystem:       context.ContextIntentService,
+	routing.SurfaceSerialization:    context.ContextIntentController,
+	routing.SurfaceCryptography:     context.ContextIntentService,
+	routing.SurfaceDataExposure:     context.ContextIntentMiddleware,
+	routing.SurfaceClientSide:       context.ContextIntentController,
+	routing.SurfaceAvailability:     context.ContextIntentMiddleware,
+	routing.SurfaceSupplyChain:      context.ContextIntentRepository,
+}
+
+func confidenceRank(value routing.Confidence) int {
+	switch value {
+	case routing.ConfidenceHigh:
+		return 3
+	case routing.ConfidenceMedium:
+		return 2
+	case routing.ConfidenceLow:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func changePaths(changes change.ChangeSet) []string {
+	paths := make([]string, 0, len(changes.Files))
+	seen := make(map[string]struct{}, len(changes.Files))
+	for _, file := range changes.Files {
+		path := file.Path()
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 // defaultSecurityDetectors is the deterministic half of the
@@ -223,7 +326,7 @@ Identify whether this change plausibly touches an attack or abuse surface, and d
 - missing rate limits or abuse controls
 
 In "surfaces" list only what the deep agent must inspect, phrased as observables in this diff (a data flow, a control-flow choice, a changed boundary) — "user-controlled input reaches a database query built by string concatenation", not "SQL injection exists".
-In "rationale" state why the deep analysis is warranted in at most two sentences; when enforcement is absent from the diff, say the surface awaits confirmation against the full codebase.
+In "reasons" state why the deep analysis is warranted in at most a few short sentences; when enforcement is absent from the diff, say the surface awaits confirmation against the full codebase.
 
 Answer escalate=true whenever such a surface is plausible — including when the pattern is uncertain or the enforcement could live outside this diff; answer escalate=false only when the change is clearly unrelated to security. Never report findings, and never make claims that require files outside this diff.`
 
@@ -235,4 +338,35 @@ var SecurityTriageRouter = AgentSpec{
 	Prompt:      securityTriagePrompt,
 	Role:        RoleRouter,
 	Policy:      AlwaysRun{},
+}
+
+// SecurityEscalationContext renders the triage routing context that a deep
+// security review consumes as input: which surfaces to examine first and why
+// the review was escalated. It is appended to the deep agent's prompt, so the
+// deep agent investigates the surfaces the router identified first instead of
+// re-deriving them from a redacted diff.
+func SecurityEscalationContext(assessment *routing.SecurityAssessment) string {
+	if assessment == nil {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("\n\nSecurity escalation context:\n")
+	if len(assessment.Surfaces) > 0 {
+		builder.WriteString("Potential surfaces:\n")
+		for _, surface := range assessment.Surfaces {
+			builder.WriteString("- ")
+			builder.WriteString(string(surface))
+			builder.WriteString("\n")
+		}
+	}
+	if len(assessment.Reasons) > 0 {
+		builder.WriteString("\nWhy this review was escalated:\n")
+		for _, reason := range assessment.Reasons {
+			builder.WriteString(reason)
+			builder.WriteString("\n")
+		}
+	}
+	builder.WriteString("\nInvestigate these areas first.\n")
+	builder.WriteString("Do not assume a vulnerability solely because an authorization check is absent from the provided diff. Resolve relevant surrounding context before making a finding.\n")
+	return builder.String()
 }

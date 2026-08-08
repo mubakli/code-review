@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"code-review/internal/ai/routing"
 )
 
 func TestDeepSeekUsesStructuredChatCompletionWithoutLeakingSecret(t *testing.T) {
@@ -95,11 +97,11 @@ func TestDeepSeekTriageProducesStructuredDecision(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		structured, err := json.Marshal(TriageResponse{
-			Status:    ResponseStatusComplete,
-			Escalate:  true,
-			Surfaces:  []string{"input handling"},
-			Rationale: "User input reaches a command.",
+		structured, err := json.Marshal(routing.SecurityAssessment{
+			Escalate:   true,
+			Confidence: routing.ConfidenceHigh,
+			Surfaces:   []routing.SecuritySurface{"command-execution"},
+			Reasons:    []string{"User input reaches a command."},
 		})
 		if err != nil {
 			t.Fatalf("encode structured triage fixture: %v", err)
@@ -121,7 +123,7 @@ func TestDeepSeekTriageProducesStructuredDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Triage() error = %v", err)
 	}
-	if !response.Escalate || len(response.Surfaces) != 1 {
+	if !response.Escalate || response.Confidence != routing.ConfidenceHigh || len(response.Surfaces) != 1 || len(response.Reasons) != 1 {
 		t.Fatalf("triage response = %#v", response)
 	}
 }

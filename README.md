@@ -58,9 +58,13 @@ When enabled, the correctness agent runs for every eligible staged change. The
 security pipeline always evaluates a lightweight triage classifier on the
 redacted diff; deterministic signal detectors (keyword, path, auth, network,
 database, filesystem, serialization, dependency, endpoint) parse the change set
-first and escalate immediately — the deep security specialist (with related
-staged-file context) runs when a signal, the triage, or any triage error
-triggers it. Escalation is fail-closed. Each path
+first and escalate immediately. Triage output is the tiny structured
+`SecurityAssessment` (escalate, confidence, a few surfaces, a few reasons) and
+is consumed as input by the deep security specialist: the escalated surfaces
+and reasons are appended to its prompt, and related staged context is resolved
+on demand (`ContextRequest{Symbols, Paths, Intent}`) only for the surrounding
+layer the surface implies. The deep agent runs when a signal, the triage, or
+any triage error triggers it. Escalation is fail-closed. Each path
 receives the same redacted, budgeted diff pipeline; Go assigns the trusted
 `agentId`, filters out-of-scope categories, and merges likely duplicates before
 returning findings.
@@ -152,6 +156,10 @@ configuration will be added with the context engine.
   oversized lines carry an explicit truncation marker.
 - AI review is disabled by default and never runs without explicit provider and
   model settings.
+- Provider egress follows a rule-based policy (`internal/ai/egress`): `.env`,
+  `*.pem`, `*.key`, and `secrets/**` are denied, `*.config.json` is redacted,
+  and every other file still passes the redactor before a provider can observe
+  it.
 - OpenAI requests set `store: false`, use strict structured output, and bound
   response size. Provider failures preserve local findings.
 
@@ -160,8 +168,7 @@ configuration will be added with the context engine.
 - `internal/change` defines the provider- and VCS-neutral changed-code model.
 - `internal/git` invokes Git directly with `exec.CommandContext`; it never
   constructs a shell command, and parses staged patches into `change` values.
-- `internal/pathfilter` applies generated-file exclusions and the stricter AI
-  egress policy.
+- `internal/pathfilter` applies generated-file exclusions for local review.
 - `internal/review` owns the local-review use case and the small analyzer port.
 - `internal/analyzers/secrets` is a concrete deterministic analyzer.
 - `internal/findings` defines the shared finding contract.
@@ -169,13 +176,19 @@ configuration will be added with the context engine.
 - `internal/ai` owns the declarative agent model, routing policies, and
   provider-neutral orchestration.
 - `internal/ai/routing` defines the deterministic signal contract
-  (`SignalDetector`, `Signal`, `SignalKind`, `SecuritySurface`, `Confidence`)
-  and the deduplicating `Aggregate` used by the security escalation policy.
+  (`SignalDetector`, `Signal`, `SignalKind`, `SecuritySurface`, `Confidence`),
+  the deduplicating `Aggregate` used by the security escalation policy, and the
+  tiny triage output `SecurityAssessment`.
 - `internal/ai/routing/detectors` implements one detector per security domain
   (keyword, path, auth, network, database, filesystem, serialization,
   dependency, endpoint); each emits routing signals, never diagnosis.
+- `internal/ai/egress` gates provider egress with allow/redact/deny rules
+  (`EgressRule{Pattern, Action}`) applied before any content leaves the
+  machine.
 - `internal/ai/context` extracts, redacts, token-budgets, and batches a change
-  set; it never talks to providers.
+  set; it never talks to providers. Its on-demand `ContextResolver` accepts a
+  `ContextRequest{Symbols, Paths, Intent}` naming only the surrounding areas an
+  escalated review needs.
 - `internal/ai/request` converts one prepared batch into a provider-neutral
   `AnalysisRequest` with a final redaction pass.
 - `internal/ai/provider` defines the provider boundary, the mock test adapter,

@@ -22,15 +22,6 @@ func DefaultPatterns() []string {
 	}
 }
 
-// DefaultAIEgressPatterns identifies sensitive configuration files that local
-// analyzers should inspect but that should never be sent to an AI provider.
-func DefaultAIEgressPatterns() []string {
-	return []string{
-		".env",
-		".env.*",
-	}
-}
-
 // Matcher applies repository-relative path exclusion patterns. A pattern
 // ending in a slash matches a directory component; other patterns match a
 // path or file name using path.Match semantics.
