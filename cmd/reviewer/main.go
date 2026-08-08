@@ -50,13 +50,14 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 	repository := flags.String("repo", workDirectory, "path inside the Git repository")
 	aiProvider := flags.String("ai-provider", string(config.AIProviderNone), "AI provider: none, openai, or deepseek")
 	aiModel := flags.String("ai-model", "", "AI model name (required when AI is enabled)")
+	aiConcurrency := flags.Int("ai-concurrency", 2, "maximum concurrent AI provider calls across agents and batches (1-8)")
 	var aiAgents valueListFlag
 	flags.Var(&aiAgents, "ai-agent", "AI review agent: correctness or security (repeatable)")
 	expectedReviewID := flags.String("expected-review-id", "", "reject review if the staged snapshot no longer matches this ID")
 	var excludes stringListFlag
 	flags.Var(&excludes, "exclude", "additional path pattern to exclude (repeatable)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: reviewer review --staged [--format human|json] [--repo PATH] [--exclude PATTERN] [--ai-provider PROVIDER --ai-model MODEL --ai-agent AGENT]")
+		fmt.Fprintln(stderr, "Usage: reviewer review --staged [--format human|json] [--repo PATH] [--exclude PATTERN] [--ai-provider PROVIDER --ai-model MODEL --ai-agent AGENT] [--ai-concurrency N]")
 		fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
@@ -89,7 +90,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, work
 		return 2
 	}
 
-	result, err := reviewStaged(ctx, *repository, reviewOptions{ExtraExcludes: excludes, AI: aiConfig, ExpectedID: *expectedReviewID})
+	result, err := reviewStaged(ctx, *repository, reviewOptions{ExtraExcludes: excludes, AI: aiConfig, ExpectedID: *expectedReviewID, AIConcurrency: *aiConcurrency})
 	if err != nil {
 		fmt.Fprintf(stderr, "review failed: %v\n", err)
 		return 1

@@ -73,6 +73,12 @@ receives the same redacted, budgeted diff pipeline; Go assigns the trusted
 `agentId`, filters out-of-scope categories, and merges likely duplicates before
 returning findings.
 
+Agents run concurrently instead of end to end: independent agents execute in
+parallel and each agent's batches are also parallel, all bounded by the
+`--ai-concurrency` provider-call limit (default 2, clamped to 1-8), so large
+multi-batch diffs finish in the time of the slowest agent chain while provider
+rate limits stay respected.
+
 Every finding carries a stable namespaced `ruleId` and a deterministic
 `findingId`. AI findings may also contain a bounded structured `proposedFix`
 only when the agent can replace the complete added-line range exactly. The VS
@@ -97,6 +103,7 @@ export REVIEWER_OPENAI_API_KEY='your-key'
 export REVIEWER_DEEPSEEK_API_KEY='your-key'
 ./reviewer review --staged --ai-provider deepseek --ai-model deepseek-chat
 ./reviewer review --staged --ai-provider deepseek --ai-model deepseek-chat --ai-agent security
+./reviewer review --staged --ai-provider openai --ai-model your-model --ai-concurrency 4
 ```
 
 Repeat `--ai-agent` to combine specialists. If omitted, Correctness and Security

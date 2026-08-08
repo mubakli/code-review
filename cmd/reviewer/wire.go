@@ -30,6 +30,7 @@ type reviewOptions struct {
 	AI            config.AI
 	Provider      provider.Provider
 	ExpectedID    string
+	AIConcurrency int
 }
 
 // reviewStaged is the composition root for the staged-review use case. Concrete
@@ -89,6 +90,9 @@ func reviewStaged(ctx stdcontext.Context, repositoryPath string, options reviewO
 	orchestrator, err := ai.NewOrchestratorWithAgentsAndResolver(preparer, request.RequestBuilder{}, providerInstance, agents, stagedContextResolver{repository: repository, egress: egressPolicy})
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI orchestrator: %w", err)
+	}
+	if options.AIConcurrency > 0 {
+		orchestrator.WithConcurrency(options.AIConcurrency)
 	}
 	// The egress policy is the first gate in the provider pipeline: content
 	// denied by the policy never reaches the preparation or provider layers.

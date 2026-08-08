@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"code-review/internal/ai"
 	aicontext "code-review/internal/ai/context"
@@ -27,9 +30,9 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 		"result, _ := run()",
 	})
 	local := localFinding("service.go", 2, "Potential provider credential", "An added line matches a credential format.")
-	providerCalls := 0
+	var providerCalls int32
 	provider := provider.Mock{AnalyzeFunc: func(_ context.Context, request request.AnalysisRequest) (*provider.AnalysisResponse, error) {
-		providerCalls++
+		atomic.AddInt32(&providerCalls, 1)
 		if strings.Contains(request.Diff(), secret) || !strings.Contains(request.Diff(), redact.Placeholder) {
 			t.Fatalf("provider received unredacted diff:\n%s", request.Diff())
 		}
@@ -79,8 +82,8 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review() error = %v", err)
 	}
-	if providerCalls != 2 || result.BatchCount != 2 || result.SuccessfulBatches != 2 || len(result.Failures) != 0 {
-		t.Fatalf("unexpected orchestration metadata: calls=%d result=%#v", providerCalls, result)
+	if calls := atomic.LoadInt32(&providerCalls); calls != 2 || result.BatchCount != 2 || result.SuccessfulBatches != 2 || len(result.Failures) != 0 {
+		t.Fatalf("unexpected orchestration metadata: calls=%d result=%#v", calls, result)
 	}
 	if len(result.Agents) != 2 || result.Agents[0] != string(ai.AgentCorrectness) || result.Agents[1] != string(ai.AgentSecurity) {
 		t.Fatalf("Agents = %#v", result.Agents)
@@ -169,10 +172,9 @@ func TestOrchestratorContinuesAfterProviderFailure(t *testing.T) {
 		lines[index] = "changed line with enough content to split batches"
 	}
 	changes := addedFile("large.ts", lines)
-	calls := 0
+	var calls int32
 	provider := provider.Mock{AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
-		calls++
-		if calls == 1 {
+		if atomic.AddInt32(&calls, 1) == 1 {
 			return nil, errors.New("provider unavailable")
 		}
 		return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{}}, nil
@@ -184,11 +186,95 @@ func TestOrchestratorContinuesAfterProviderFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review() error = %v", err)
 	}
-	if result.BatchCount < 2 || calls != result.BatchCount {
+	if result.BatchCount < 2 || atomic.LoadInt32(&calls) != int32(result.BatchCount) {
 		t.Fatalf("provider calls = %d, batches = %d", calls, result.BatchCount)
 	}
 	if len(result.Failures) != 1 || result.SuccessfulBatches != result.BatchCount-1 {
 		t.Fatalf("orchestrator did not continue after failure: %#v", result)
+	}
+}
+
+func TestOrchestratorRunsAgentsConcurrently(t *testing.T) {
+	t.Parallel()
+
+	// Both agents analyze the same credential-bearing change set: correctness
+	// and security (which escalates directly on the deterministic signal, so
+	// no triage call stands between the two analyzer batches). Each Analyze
+	// blocks until both agents are in flight, proving agents overlap instead
+	// of serializing.
+	changes := addedFile("service.go", []string{`password := request.FormValue("password")`})
+	const expectedInFlight = 2
+	entered := make(chan struct{}, expectedInFlight)
+	release := make(chan struct{})
+	provider := provider.Mock{AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
+		entered <- struct{}{}
+		<-release
+		return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
+	}}
+	agents, _ := ai.SelectAgents([]string{"correctness", "security"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		for i := 0; i < expectedInFlight; i++ {
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(release)
+	}()
+
+	result, err := orchestrator.Review(ctx, changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if len(result.Agents) != 2 {
+		t.Fatalf("Agents = %#v, want both agents", result.Agents)
+	}
+}
+
+func TestOrchestratorBoundsConcurrencyAcrossBatches(t *testing.T) {
+	t.Parallel()
+
+	// With a concurrency limit of one, provider calls from parallel batches
+	// must never overlap, even when the diff splits into many batches.
+	lines := make([]string, 60)
+	for index := range lines {
+		lines[index] = "changed line with enough content to split batches"
+	}
+	changes := addedFile("large.ts", lines)
+	var inFlight, maxInFlight int32
+	var mu sync.Mutex
+	provider := provider.Mock{AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
+	}}
+	agents, _ := ai.SelectAgents([]string{"correctness"})
+	builder := newPreparer(t, aicontext.Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(builder, request.RequestBuilder{}, provider, agents)
+	orchestrator.WithConcurrency(1)
+
+	result, err := orchestrator.Review(context.Background(), changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("BatchCount = %d, want multiple batches", result.BatchCount)
+	}
+	if max := atomic.LoadInt32(&maxInFlight); max > 1 {
+		t.Fatalf("max concurrent provider calls = %d, want 1", max)
 	}
 }
 
