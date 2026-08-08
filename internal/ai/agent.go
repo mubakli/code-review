@@ -61,9 +61,10 @@ func (AlwaysRun) ShouldRun(stdcontext.Context, change.ChangeSet, []findings.Find
 }
 
 // SecurityEscalationPolicy is the fail-closed gate in front of the deep
-// security specialist: runDeepSecurity = deterministic signal || triage-escalate.
-// Deterministic signals skip the router; otherwise the triage router decides,
-// and any triage error escalates.
+// security specialist. High-confidence deterministic signals skip the router
+// and escalate directly; otherwise the triage router decides — with detected
+// medium/low signals handed to it as routing features — and any triage error
+// escalates.
 type SecurityEscalationPolicy struct {
 	// Router is the triage router consulted before escalation. A zero value
 	// falls back to SecurityTriageRouter.
@@ -74,11 +75,23 @@ type SecurityEscalationPolicy struct {
 }
 
 func (p SecurityEscalationPolicy) ShouldRun(ctx stdcontext.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error) {
-	assessment := assessmentFromSignals(p.detectSignals(changes))
-	if assessment == nil {
+	signals := p.detectSignals(changes)
+	var assessment *routing.SecurityAssessment
+	if hasHighConfidenceSignal(signals) {
+		// High-confidence signals (command execution, raw dynamic SQL, eval,
+		// unsafe deserialization, credential assignment) are strong enough to
+		// skip the triage call entirely: they would only re-confirm escalation.
+		assessment = assessmentFromSignals(signals)
+	} else {
 		router := p.Router
 		if router.ID == "" {
 			router = SecurityTriageRouter
+		}
+		if len(signals) > 0 {
+			// Broad signals (request, query, path, url, http., auth, ...) are
+			// routing features, not verdicts: the cheap triage router examines
+			// them without the change being escalated blindly.
+			router.Prompt += triageFeatureContext(signals)
 		}
 		var err error
 		assessment, err = scope.RunRouter(ctx, router, changes, staticFindings, result, batchIndex)
@@ -98,14 +111,53 @@ func (p SecurityEscalationPolicy) ShouldRun(ctx stdcontext.Context, changes chan
 
 // detectSignals returns the deterministic security signals for a change set,
 // consulting the injected detector or the default detector aggregate. Signal
-// detection is conservative: over-triggering costs tokens, under-triggering
-// silently loses security coverage.
+// detection is conservative: over-triggering only costs router tokens, while
+// under-triggering silently loses security coverage.
 func (p SecurityEscalationPolicy) detectSignals(changes change.ChangeSet) []routing.Signal {
 	detector := p.Detector
 	if detector == nil {
 		detector = defaultSecurityDetectors
 	}
 	return detector.Detect(changes)
+}
+
+// hasHighConfidenceSignal reports whether any signal is strong enough to skip
+// the triage router. Only these signals escalate directly; everything else is
+// a routing feature for the triage router to evaluate.
+func hasHighConfidenceSignal(signals []routing.Signal) bool {
+	for _, signal := range signals {
+		if signal.Confidence == routing.ConfidenceHigh {
+			return true
+		}
+	}
+	return false
+}
+
+// triageFeatureContext renders detected medium/low signals as routing
+// features for the triage router: compact, surface-first, and explicitly
+// framed as things to examine rather than confirmed vulnerabilities.
+func triageFeatureContext(signals []routing.Signal) string {
+	var builder strings.Builder
+	builder.WriteString("\n\nDeterministic features detected in this diff (examine them, but do not treat them as confirmed vulnerabilities):\n")
+	seen := make(map[string]struct{}, len(signals))
+	for _, signal := range signals {
+		key := string(signal.Surface) + "|" + signal.File
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		if len(builder.String()) > 1200 {
+			break
+		}
+		seen[key] = struct{}{}
+		builder.WriteString("- ")
+		builder.WriteString(string(signal.Surface))
+		builder.WriteString(" (")
+		builder.WriteString(signal.File)
+		builder.WriteString("): ")
+		builder.WriteString(signal.Reason)
+		builder.WriteString("\n")
+	}
+	return builder.String()
 }
 
 // assessmentFromSignals turns deterministic signals into the same tiny
@@ -136,13 +188,15 @@ func assessmentFromSignals(signals []routing.Signal) *routing.SecurityAssessment
 	return assessment
 }
 
-// contextRequestForAssessment asks the context resolver for only the areas an
-// escalated assessment points at: the changed paths plus the surrounding layer
-// the dominant surface implies.
+// contextRequestForAssessment asks the context resolver for only what the
+// deep specialist needs beyond the diff itself: symbols extracted from the
+// added lines (the changed code, its imports, and the callees it mentions) and
+// the surrounding layer the dominant surface implies. The diff already shows
+// the changed files, so they are never re-sent as context.
 func contextRequestForAssessment(changes change.ChangeSet, assessment *routing.SecurityAssessment) context.ContextRequest {
 	return context.ContextRequest{
-		Paths:  changePaths(changes),
-		Intent: intentForAssessment(assessment),
+		Symbols: context.DiffSymbols(changes),
+		Intent:  intentForAssessment(assessment),
 	}
 }
 
@@ -192,20 +246,6 @@ func confidenceRank(value routing.Confidence) int {
 	default:
 		return 0
 	}
-}
-
-func changePaths(changes change.ChangeSet) []string {
-	paths := make([]string, 0, len(changes.Files))
-	seen := make(map[string]struct{}, len(changes.Files))
-	for _, file := range changes.Files {
-		path := file.Path()
-		if _, exists := seen[path]; exists {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	return paths
 }
 
 // defaultSecurityDetectors is the deterministic half of the

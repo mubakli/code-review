@@ -14,7 +14,7 @@ type DatabaseDetector struct{}
 
 var databaseTerms = []term{
 	{word: "sql", surface: routing.SurfaceInjection, confidence: routing.ConfidenceHigh},
-	{word: "query", surface: routing.SurfaceInjection, confidence: routing.ConfidenceHigh},
+	{word: "query", surface: routing.SurfaceInjection, confidence: routing.ConfidenceLow},
 	{word: "orm", surface: routing.SurfaceInjection, confidence: routing.ConfidenceMedium},
 	{word: "raw", surface: routing.SurfaceInjection, confidence: routing.ConfidenceMedium},
 	{word: "ldap", surface: routing.SurfaceInjection, confidence: routing.ConfidenceHigh},

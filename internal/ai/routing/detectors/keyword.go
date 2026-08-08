@@ -52,7 +52,7 @@ var keywordTerms = []term{
 	{word: "eval(", surface: routing.SurfaceCommandExecution, confidence: routing.ConfidenceHigh},
 	{word: "subprocess", surface: routing.SurfaceCommandExecution, confidence: routing.ConfidenceHigh},
 	{word: "shell", surface: routing.SurfaceCommandExecution, confidence: routing.ConfidenceMedium},
-	{word: "sudo", surface: routing.SurfaceCommandExecution, confidence: routing.ConfidenceHigh},
+	{word: "sudo", surface: routing.SurfaceCommandExecution, confidence: routing.ConfidenceMedium},
 	// Sensitive data and logging.
 	{word: "anonym", surface: routing.SurfaceDataExposure, confidence: routing.ConfidenceMedium},
 	{word: "pii", surface: routing.SurfaceDataExposure, confidence: routing.ConfidenceHigh},

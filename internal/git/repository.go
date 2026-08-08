@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"code-review/internal/change"
@@ -130,20 +131,42 @@ func validateRepoRelativePath(path string) error {
 	return nil
 }
 
-// TrackedFiles returns the repository-relative paths of every file tracked in
-// the index. Used by context resolvers to expand related code on demand.
-func (r *Repository) TrackedFiles(ctx context.Context) ([]string, error) {
-	output, stderr, err := run(ctx, r.root, maxStagedDiffBytes, "ls-files", "--cached", "-z")
+// GrepIndex returns, per index-tracked file, how many lines match any of the
+// fixed-string patterns. Binary files are skipped. Used by context resolvers
+// to find the files that reference a symbol without reading the whole
+// repository.
+func (r *Repository) GrepIndex(ctx context.Context, patterns []string) (map[string]int, error) {
+	if len(patterns) == 0 {
+		return map[string]int{}, nil
+	}
+	args := []string{"grep", "-c", "-I", "-F", "--cached"}
+	for _, pattern := range patterns {
+		args = append(args, "-e", pattern)
+	}
+	output, stderr, err := run(ctx, r.root, maxStagedFileBytes, args...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		return nil, commandError("list tracked files", stderr, err)
+		return nil, commandError("search index for symbols", stderr, err)
 	}
-	if len(output) == 0 {
-		return nil, nil
+	matches := make(map[string]int)
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		separator := strings.LastIndex(line, ":")
+		if separator <= 0 {
+			continue
+		}
+		count, err := strconv.Atoi(line[separator+1:])
+		if err != nil {
+			continue
+		}
+		matches[line[:separator]] = count
 	}
-	return strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00"), nil
+	return matches, nil
 }
 
 func (r *Repository) StagedSnapshot(ctx context.Context) (StagedSnapshot, error) {

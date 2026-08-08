@@ -117,6 +117,61 @@ func TestStagedSnapshotIDTracksOnlyIndexChanges(t *testing.T) {
 	}
 }
 
+func TestGrepIndexFindsSymbolReferencesInIndex(t *testing.T) {
+	requireGit(t)
+
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	runTestGit(t, root, "config", "user.email", "reviewer@example.invalid")
+	runTestGit(t, root, "config", "user.name", "Reviewer Test")
+
+	for _, directory := range []string{"users", "auth", "docs"} {
+		if err := os.MkdirAll(filepath.Join(root, directory), 0o755); err != nil {
+			t.Fatalf("create fixture directory: %v", err)
+		}
+	}
+	writeTestFile(t, filepath.Join(root, "users", "store.go"), "package users\nfunc FindUser(id int64) User {\n\treturn User{}\n}\n")
+	writeTestFile(t, filepath.Join(root, "auth", "middleware.go"), "package auth\nimport \"acme/users\"\nfunc guard() { users.FindUser(1) }\n")
+	writeTestFile(t, filepath.Join(root, "docs", "notes.txt"), "FindUser is mentioned in prose\n")
+	runTestGit(t, root, "add", "--", ".")
+
+	repository, err := Open(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	matches, err := repository.GrepIndex(context.Background(), []string{"FindUser"})
+	if err != nil {
+		t.Fatalf("GrepIndex() error = %v", err)
+	}
+	if matches["users/store.go"] == 0 {
+		t.Fatalf("GrepIndex() missed users/store.go: %#v", matches)
+	}
+	if matches["auth/middleware.go"] == 0 {
+		t.Fatalf("GrepIndex() missed auth/middleware.go: %#v", matches)
+	}
+	if matches["docs/notes.txt"] != 1 {
+		t.Fatalf("GrepIndex() should count text matches in prose files: %#v", matches)
+	}
+}
+
+func TestGrepIndexWithoutPatterns(t *testing.T) {
+	requireGit(t)
+
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	repository, err := Open(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	matches, err := repository.GrepIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GrepIndex() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("GrepIndex(nil) = %#v, want no matches", matches)
+	}
+}
+
 func TestOpenOutsideRepository(t *testing.T) {
 	requireGit(t)
 

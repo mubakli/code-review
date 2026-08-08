@@ -160,19 +160,28 @@ type stagedContextResolver struct {
 	egress     egress.Policy
 }
 
-// maxResolverFiles bounds how many related files one context request may
-// expand beyond the changed paths themselves.
-const maxResolverFiles = 12
+// maxContextSymbols bounds how many diff symbols one context request searches
+// the index for, and maxRelatedContextFiles bounds how many related files a
+// deep specialist may receive: the diff shows the changed files, so context is
+// only the 1-3 surrounding files the symbols actually point at.
+const (
+	maxContextSymbols      = 8
+	maxRelatedContextFiles = 3
+)
 
-// Resolve supplies related staged code on demand: the request names only the
-// areas an escalated assessment points at. Changed paths are always resolved
-// first; an intent expands the surrounding layer (route, middleware, service,
-// repository, authorization, ownership) and symbols prefer related files that
-// share identifiers. Every file passes the egress policy before its content
-// can leave the machine.
+// Resolve supplies related staged code on demand. The diff already shows the
+// changed files, so they are never re-sent as context: instead the resolver
+// searches the index for the diff's symbols (identifiers, imports, callees),
+// excludes the changed files themselves and anything the egress policy denies,
+// prefers the surrounding layer the intent names, and returns at most three
+// related files. The model never receives filesystem access: it can only ask
+// for symbols, and the resolver answers with redacted, budgeted content.
 func (r stagedContextResolver) Resolve(ctx stdcontext.Context, changes change.ChangeSet, request aicontext.ContextRequest) (aicontext.RepositoryContext, error) {
-	resolved := make([]aicontext.ContextFile, 0, len(request.Paths))
-	seen := make(map[string]struct{}, len(request.Paths))
+	resolved := make([]aicontext.ContextFile, 0, maxRelatedContextFiles)
+	seen := make(map[string]struct{}, len(changes.Files)+len(request.Paths))
+	for _, file := range changes.Files {
+		seen[file.Path()] = struct{}{}
+	}
 	for _, path := range request.Paths {
 		if err := ctx.Err(); err != nil {
 			return aicontext.RepositoryContext{}, err
@@ -185,10 +194,17 @@ func (r stagedContextResolver) Resolve(ctx stdcontext.Context, changes change.Ch
 			resolved = append(resolved, file)
 		}
 	}
-	if request.Intent == "" || len(resolved) >= maxResolverFiles {
+	if len(resolved) >= maxRelatedContextFiles {
 		return aicontext.RepositoryContext{Files: resolved}, nil
 	}
-	related, err := r.relatedFiles(ctx, request, seen)
+	symbols := request.Symbols
+	if len(symbols) > maxContextSymbols {
+		symbols = symbols[:maxContextSymbols]
+	}
+	if len(symbols) == 0 {
+		return aicontext.RepositoryContext{Files: resolved}, nil
+	}
+	related, err := r.symbolFiles(ctx, changes, request.Intent, symbols, seen)
 	if err != nil {
 		return aicontext.RepositoryContext{Files: resolved}, nil // context is advisory
 	}
@@ -206,42 +222,52 @@ func (r stagedContextResolver) stagedFile(ctx stdcontext.Context, path string) (
 	return aicontext.ContextFile{Path: path, Content: content}, true
 }
 
-func (r stagedContextResolver) relatedFiles(ctx stdcontext.Context, request aicontext.ContextRequest, seen map[string]struct{}) ([]aicontext.ContextFile, error) {
-	markers := intentPathMarkers[request.Intent]
-	if len(markers) == 0 {
-		return nil, nil
-	}
-	tracked, err := r.repository.TrackedFiles(ctx)
+// symbolFiles finds the files whose index content references the diff's
+// symbols, ranked by how many references they hold. Files matching the intent
+// layer come first, then the most referenced files; changed files and
+// egress-denied files are excluded. A deterministic path tiebreak keeps the
+// selection stable.
+func (r stagedContextResolver) symbolFiles(ctx stdcontext.Context, changes change.ChangeSet, intent aicontext.ContextIntent, symbols []string, seen map[string]struct{}) ([]aicontext.ContextFile, error) {
+	matches, err := r.repository.GrepIndex(ctx, symbols)
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]string, 0, len(tracked))
-	for _, path := range tracked {
+	markers := intentPathMarkers[intent]
+	type candidate struct {
+		path  string
+		count int
+		marks bool
+	}
+	candidates := make([]candidate, 0, len(matches))
+	for path, count := range matches {
 		if _, duplicate := seen[path]; duplicate {
-			continue
-		}
-		if !matchesIntent(path, markers, request.Symbols) {
 			continue
 		}
 		if !r.egress.Allow(path) {
 			continue
 		}
-		candidates = append(candidates, path)
+		candidates = append(candidates, candidate{path: path, count: count, marks: matchesIntent(path, markers, symbols)})
 	}
-	sort.Strings(candidates)
-	remaining := maxResolverFiles - len(seen)
-	if remaining <= 0 {
-		return nil, nil
-	}
-	if len(candidates) > remaining {
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if left.marks != right.marks {
+			return left.marks
+		}
+		if left.count != right.count {
+			return left.count > right.count
+		}
+		return left.path < right.path
+	})
+	remaining := maxRelatedContextFiles - len(seen)
+	if remaining > 0 && len(candidates) > remaining {
 		candidates = candidates[:remaining]
 	}
 	files := make([]aicontext.ContextFile, 0, len(candidates))
-	for _, path := range candidates {
+	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if file, ok := r.stagedFile(ctx, path); ok {
+		if file, ok := r.stagedFile(ctx, candidate.path); ok {
 			files = append(files, file)
 		}
 	}

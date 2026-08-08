@@ -350,6 +350,42 @@ func TestSecurityPipelineEscalatesOnTriageDecision(t *testing.T) {
 	}
 }
 
+func TestSecurityPipelineRunsRouterOnLowConfidenceSignals(t *testing.T) {
+	t.Parallel()
+
+	// Broad signals (query, request, url., ...) are routing features, not
+	// verdicts: the triage router must run and receive them, and the deep
+	// security agent must not run unless the router escalates.
+	changes := addedFile("service.go", []string{`query := request.URL.Query().Get("q")`})
+	featuresSeen := false
+	provider := provider.Mock{
+		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
+			t.Fatal("deep security ran without a triage escalation")
+			return nil, nil
+		},
+		TriageFunc: func(_ context.Context, req request.AnalysisRequest) (*routing.SecurityAssessment, error) {
+			featuresSeen = strings.Contains(req.Instructions(), "Deterministic features detected in this diff")
+			return &routing.SecurityAssessment{Escalate: false, Confidence: routing.ConfidenceLow}, nil
+		},
+	}
+	agents, _ := ai.SelectAgents([]string{"security"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
+
+	result, err := orchestrator.Review(context.Background(), changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !featuresSeen {
+		t.Fatal("triage router did not receive the low-confidence signals as features")
+	}
+	if !containsAgent(result.Agents, string(ai.AgentSecurityTriage)) {
+		t.Fatalf("security-triage agent is missing: %#v", result.Agents)
+	}
+	if containsAgent(result.Agents, string(ai.AgentSecurity)) {
+		t.Fatalf("deep security ran despite triage clearing: %#v", result.Agents)
+	}
+}
+
 func TestSecurityPipelineFailClosedOnTriageError(t *testing.T) {
 	t.Parallel()
 

@@ -54,21 +54,27 @@ func TestSecurityEscalationPolicySkipsRouterOnSensitivePathSignal(t *testing.T) 
 	}
 }
 
-func TestSecurityEscalationPolicySkipsRouterOnEndpointSignal(t *testing.T) {
+func TestSecurityEscalationPolicyFeedsEndpointSignalsToTriage(t *testing.T) {
 	t.Parallel()
 
-	scope := &fakePolicyScope{t: t}
+	// A new endpoint registration is a broad signal (medium confidence), not a
+	// verdict: the cheap triage router examines it instead of the change being
+	// escalated blindly, so routine endpoint work stays on the triage path.
+	scope := &fakePolicyScope{t: t, routerEscalate: true}
 	changes := addedFile("api.py", []string{`@app.post("/transfer") def transfer():`})
 	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
 	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
 	if err != nil {
 		t.Fatalf("ShouldRun() error = %v", err)
 	}
-	if !decision.Run {
-		t.Fatal("deterministic endpoint signal did not escalate")
+	if scope.routerRuns != 1 {
+		t.Fatalf("triage router ran %d times, want 1 for an endpoint feature", scope.routerRuns)
 	}
-	if scope.routerRuns != 0 {
-		t.Fatalf("triage router ran %d times, want 0 with an endpoint signal", scope.routerRuns)
+	if !strings.Contains(scope.lastRouter.Prompt, "Deterministic features detected in this diff") {
+		t.Fatalf("triage router did not receive the endpoint feature:\n%s", scope.lastRouter.Prompt)
+	}
+	if !decision.Run {
+		t.Fatal("router escalation did not reach the decision")
 	}
 }
 
@@ -111,17 +117,22 @@ func TestSecurityEscalationPolicyAcceptsInjectedDetector(t *testing.T) {
 }
 
 type fixedSignalDetector struct {
-	signals int
+	signals    int
+	confidence routing.Confidence
 }
 
 func (d fixedSignalDetector) Detect(change.ChangeSet) []routing.Signal {
 	if d.signals == 0 {
 		return nil
 	}
+	confidence := d.confidence
+	if confidence == "" {
+		confidence = routing.ConfidenceHigh
+	}
 	return []routing.Signal{{
 		Kind:       routing.SignalKeyword,
 		Surface:    routing.SurfaceCredentials,
-		Confidence: routing.ConfidenceHigh,
+		Confidence: confidence,
 		File:       "injected.go",
 		Reason:     "injected deterministic signal",
 	}}
@@ -284,7 +295,7 @@ func TestSecurityEscalationPolicyRequestsIntentAwareContext(t *testing.T) {
 	t.Parallel()
 
 	scope := &fakePolicyScope{t: t, routerEscalate: true}
-	changes := addedFile("service.go", []string{"return result"})
+	changes := addedFile("service.go", []string{`rows := store.FindUser(profile.ID)`})
 	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
 	if _, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope); err != nil {
 		t.Fatalf("ShouldRun() error = %v", err)
@@ -292,8 +303,50 @@ func TestSecurityEscalationPolicyRequestsIntentAwareContext(t *testing.T) {
 	if scope.lastRequest.Intent != aicontext.ContextIntentAuthorization {
 		t.Fatalf("context request intent = %q, want authorization", scope.lastRequest.Intent)
 	}
-	if len(scope.lastRequest.Paths) != 1 || scope.lastRequest.Paths[0] != "service.go" {
-		t.Fatalf("context request paths = %#v", scope.lastRequest.Paths)
+	if len(scope.lastRequest.Symbols) == 0 {
+		t.Fatalf("context request carries no diff symbols: %#v", scope.lastRequest)
+	}
+	if len(scope.lastRequest.Paths) != 0 {
+		t.Fatalf("context request re-sends changed files as context: %#v", scope.lastRequest.Paths)
+	}
+}
+
+func TestSecurityEscalationPolicyLowConfidenceSignalsFeedTriageFeatures(t *testing.T) {
+	t.Parallel()
+
+	scope := &fakePolicyScope{t: t, routerEscalate: true}
+	changes := addedFile("service.go", []string{"return result"})
+	policy := ai.SecurityEscalationPolicy{Detector: fixedSignalDetector{signals: 1, confidence: routing.ConfidenceLow}}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if scope.routerRuns != 1 {
+		t.Fatalf("triage router ran %d times, want 1 for a low-confidence signal", scope.routerRuns)
+	}
+	if !strings.Contains(scope.lastRouter.Prompt, "Deterministic features detected in this diff") {
+		t.Fatalf("triage router did not receive the low-confidence feature:\n%s", scope.lastRouter.Prompt)
+	}
+	if !decision.Run {
+		t.Fatal("router escalation did not reach the decision")
+	}
+}
+
+func TestSecurityEscalationPolicySkipsRouterOnHighConfidenceSignal(t *testing.T) {
+	t.Parallel()
+
+	scope := &fakePolicyScope{t: t, routerEscalate: true}
+	changes := addedFile("service.go", []string{"return result"})
+	policy := ai.SecurityEscalationPolicy{Detector: fixedSignalDetector{signals: 1, confidence: routing.ConfidenceHigh}}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if scope.routerRuns != 0 {
+		t.Fatalf("triage router ran %d times, want 0 for a high-confidence signal", scope.routerRuns)
+	}
+	if !decision.Run || decision.Assessment == nil || !decision.Assessment.Escalate {
+		t.Fatalf("high-confidence signal did not escalate directly: %#v", decision)
 	}
 }
 
@@ -329,12 +382,14 @@ type fakePolicyScope struct {
 	routerEscalate  bool
 	routerRuns      int
 	contextResolves int
+	lastRouter      ai.AgentSpec
 	lastRequest     aicontext.ContextRequest
 	assessment      *routing.SecurityAssessment
 }
 
-func (s *fakePolicyScope) RunRouter(context.Context, ai.AgentSpec, change.ChangeSet, []findings.Finding, *ai.ReviewResult, *int) (*routing.SecurityAssessment, error) {
+func (s *fakePolicyScope) RunRouter(_ context.Context, spec ai.AgentSpec, changes change.ChangeSet, _ []findings.Finding, _ *ai.ReviewResult, _ *int) (*routing.SecurityAssessment, error) {
 	s.routerRuns++
+	s.lastRouter = spec
 	if !s.routerEscalate {
 		return nil, nil
 	}

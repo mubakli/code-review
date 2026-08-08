@@ -55,16 +55,20 @@ provider only when AI review is explicitly enabled.
 
 AI review uses selectable specialist agents rather than one unrestricted prompt.
 When enabled, the correctness agent runs for every eligible staged change. The
-security pipeline always evaluates a lightweight triage classifier on the
-redacted diff; deterministic signal detectors (keyword, path, auth, network,
-database, filesystem, serialization, dependency, endpoint) parse the change set
-first and escalate immediately. Triage output is the tiny structured
-`SecurityAssessment` (escalate, confidence, a few surfaces, a few reasons) and
-is consumed as input by the deep security specialist: the escalated surfaces
-and reasons are appended to its prompt, and related staged context is resolved
-on demand (`ContextRequest{Symbols, Paths, Intent}`) only for the surrounding
-layer the surface implies. The deep agent runs when a signal, the triage, or
-any triage error triggers it. Escalation is fail-closed. Each path
+security pipeline first evaluates deterministic signal detectors; only
+high-confidence signals (command execution, raw dynamic SQL construction, eval,
+unsafe deserialization, credential assignment) escalate directly without a
+triage call. Otherwise a lightweight triage classifier runs on the redacted
+diff, seeded with the detected medium/low signals (request, query, path, url.,
+auth, endpoint registration, ...) as routing features. Triage output is the
+tiny structured `SecurityAssessment` (escalate, confidence, a few surfaces, a
+few reasons) and is consumed as input by the deep security specialist: the
+escalated surfaces and reasons are appended to its prompt, and related staged
+context is resolved on demand — symbols extracted from the added lines are
+searched in the Git index, changed files are never re-sent, and only the 1-3
+surrounding files the symbols point at are fetched, egress-checked, redacted,
+and budgeted. The deep agent runs when a signal, the triage, or any triage
+error triggers it. Escalation is fail-closed. Each path
 receives the same redacted, budgeted diff pipeline; Go assigns the trusted
 `agentId`, filters out-of-scope categories, and merges likely duplicates before
 returning findings.
@@ -160,6 +164,9 @@ configuration will be added with the context engine.
   `*.pem`, `*.key`, and `secrets/**` are denied, `*.config.json` is redacted,
   and every other file still passes the redactor before a provider can observe
   it.
+- The deep security agent never receives filesystem access: related context is
+  resolved on demand from the Git index by symbol lookup and returned redacted
+  and token-budgeted.
 - OpenAI requests set `store: false`, use strict structured output, and bound
   response size. Provider failures preserve local findings.
 

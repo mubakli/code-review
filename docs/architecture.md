@@ -46,7 +46,9 @@ that routine adapter splits do not make this document stale:
   set into prepared context. Its on-demand `ContextResolver` receives a
   `ContextRequest{Symbols, Paths, Intent}` naming only the surrounding areas
   (route, middleware, controller, service, repository, authorization,
-  ownership) an escalated review needs. It performs no provider calls.
+  ownership) an escalated review needs, and `DiffSymbols` turns added diff
+  lines into the symbols the resolver searches for. It performs no provider
+  calls.
 - `internal/ai/request` turns one prepared batch into a provider-neutral
   AnalysisRequest (final redaction pass, prompt attachment). It never talks to
   a network.
@@ -333,14 +335,21 @@ replace the deterministic title, message, or source.
 
 Specialist review agents are provider-neutral values owned by `internal/ai`.
 The correctness agent always reviews every eligible staged change. The security
-pipeline runs deterministic signal detectors over the change set and escalates
-to a deep security specialist when a signal or the triage router decision
-require it. The deterministic half of the `SecurityEscalationPolicy` gate is a
-`SignalDetector` aggregate: one detector per domain (keyword, path, auth,
-network, database, filesystem, serialization, dependency, endpoint) converts a
-change set into `Signal` values that name a security surface, a confidence, and
-a reason — routing, never diagnosis. Detectors ignore deleted lines, live in
-`internal/ai/routing`, and are stateless.
+pipeline is a three-tier gate. First, deterministic signal detectors (one per
+domain: keyword, path, auth, network, database, filesystem, serialization,
+dependency, endpoint) convert a change set into `Signal` values that name a
+security surface, a confidence, and a reason — routing, never diagnosis.
+Detectors ignore deleted lines, live in `internal/ai/routing`, and are
+stateless. Second, only high-confidence signals (command execution, raw
+dynamic SQL construction, eval, unsafe deserialization, credential assignment)
+escalate directly without a triage call: writing `exec.Command`, a raw SQL
+concatenation, or a `password` assignment is strong enough that the cheap
+router would only re-confirm escalation. Third, everything else — broad terms
+such as `request`, `query`, `path`, `url.`, `http.`, `auth`, and endpoint
+registrations — is seeded into the lightweight triage router as routing
+features, and the router decides. This keeps the cheap-triage -> expensive-
+security economy intact: routine backend work (new endpoints, query handling)
+stays on the triage path instead of forcing the deep agent on every change.
 
 Triage routes, it never diagnoses. Its output is the tiny structured
 `routing.SecurityAssessment` (escalate, confidence, at most a few surfaces, at
@@ -349,20 +358,29 @@ observables from the diff that the deep agent must examine (data flows,
 control-flow choices, changed boundaries) framed as areas to inspect — never
 confirmed vulnerabilities, because enforcement such as authorization middleware
 can live outside the diff. The same `SecurityAssessment` shape is produced on
-the deterministic signal path, so both escalation paths hand the deep agent
-identical routing context.
+the deterministic high-confidence path, so both escalation paths hand the deep
+agent identical routing context.
 
 The deep security agent consumes that assessment as input: the orchestrator
 appends a `Security escalation context` block (potential surfaces, why the
 review was escalated, "Investigate these areas first", and guidance not to
 assume a vulnerability solely because an authorization check is absent from
-the provided diff) to the agent's prompt. The agent may also receive related
-staged-file context, resolved on demand through `ContextResolver.Resolve`: the
-policy builds a `ContextRequest{Symbols, Paths, Intent}` from the assessment,
-so only the surrounding layer the dominant surface implies (route, middleware,
-controller, service, repository, authorization policy, ownership) is expanded
-from the Git index, redacted and budgeted. Escalation is fail-closed: any
-triage provider or validation error triggers deep review.
+the provided diff) to the agent's prompt.
+
+Related context is resolved on demand and is never the changed files
+themselves: the diff already shows them, so re-sending their full content
+would add no information. The policy builds a `ContextRequest{Symbols, Paths,
+Intent}` where `Symbols` come from `DiffSymbols`: identifiers, call targets,
+and import package names extracted from the added lines, filtered against a
+generic-word list and capped. The concrete resolver in the composition root
+searches the Git index for those symbols (`git grep` on the index), excludes
+the changed files and anything the egress policy denies, prefers the
+surrounding layer the dominant surface implies (route, middleware, controller,
+service, repository, authorization policy, ownership), and returns at most
+three related files, redacted and budgeted downstream. The model never
+receives filesystem access: it can only ask for symbols, and Go answers with
+safe, bounded content. Escalation is fail-closed: any triage provider or
+validation error triggers deep review.
 
 Provider output cannot choose its identity: orchestration assigns `agentId` after
 validating file membership, changed-line location, and the category allowlist.
