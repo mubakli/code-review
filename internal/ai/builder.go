@@ -51,17 +51,17 @@ func New(budget Budget) (Builder, error) {
 	}, nil
 }
 
-func (b Builder) ForAgent(agent ReviewAgent) (Builder, error) {
-	instructions := strings.TrimSpace(agent.Instructions)
-	if instructions == "" {
-		return Builder{}, fmt.Errorf("agent instructions are required")
+func (b Builder) ForAgent(agent AgentSpec) (Builder, error) {
+	prompt := strings.TrimSpace(agent.Prompt)
+	if prompt == "" {
+		return Builder{}, fmt.Errorf("agent prompt is required")
 	}
-	instructionCost := EstimateTokens(instructions)
+	instructionCost := EstimateTokens(prompt)
 	diffLimit, err := b.budget.diffLimit(instructionCost)
 	if err != nil {
 		return Builder{}, err
 	}
-	b.instructions = instructions
+	b.instructions = prompt
 	b.instructionCost = instructionCost
 	b.diffTokenLimit = diffLimit
 	return b, nil

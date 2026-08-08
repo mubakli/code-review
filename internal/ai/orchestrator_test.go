@@ -219,6 +219,60 @@ func TestNewOrchestratorRequiresProvider(t *testing.T) {
 	}
 }
 
+func TestNewOrchestratorRejectsRouterAgentsInTheReviewLoop(t *testing.T) {
+	t.Parallel()
+
+	_, err := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), mock.Provider{}, []ai.AgentSpec{ai.SecurityTriageRouter})
+	if err == nil {
+		t.Fatal("NewOrchestratorWithAgents() error = nil for a router agent")
+	}
+}
+
+func TestNewOrchestratorRequiresRoutingPolicy(t *testing.T) {
+	t.Parallel()
+
+	agents := []ai.AgentSpec{{
+		ID:   ai.AgentCorrectness,
+		Role: ai.RoleAnalyzer,
+	}}
+	if _, err := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), mock.Provider{}, agents); err == nil {
+		t.Fatal("NewOrchestratorWithAgents() error = nil for an agent without a policy")
+	}
+}
+
+func TestSecurityPipelineSkipsRouterOnDeterministicSignal(t *testing.T) {
+	t.Parallel()
+
+	changes := addedFile("service.go", []string{`password := request.FormValue("password")`})
+	triageCalled := false
+	provider := mock.Provider{
+		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+		},
+		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
+			triageCalled = true
+			t.Fatal("triage router ran despite a deterministic security signal")
+			return nil, nil
+		},
+	}
+	agents, _ := ai.SelectAgents([]string{"security"})
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+
+	result, err := orchestrator.Review(context.Background(), changes, nil)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if triageCalled {
+		t.Fatal("triage router was called despite the deterministic signal")
+	}
+	if !containsAgent(result.Agents, string(ai.AgentSecurity)) {
+		t.Fatalf("deep security did not run on the deterministic signal: %#v", result.Agents)
+	}
+	if containsAgent(result.Agents, string(ai.AgentSecurityTriage)) {
+		t.Fatalf("triage router was recorded despite the deterministic shortcut: %#v", result.Agents)
+	}
+}
+
 func TestSecurityPipelineSkipsDeepReviewWhenTriageClears(t *testing.T) {
 	t.Parallel()
 
