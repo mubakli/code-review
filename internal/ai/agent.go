@@ -1,10 +1,11 @@
 package ai
 
 import (
-	"context"
+	stdcontext "context"
 	"fmt"
 	"strings"
 
+	"code-review/internal/ai/context"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
@@ -33,26 +34,26 @@ type AgentSpec struct {
 // which related context. Policies may consult router agents through the scope
 // and record their activity before returning a Decision.
 type RoutingPolicy interface {
-	ShouldRun(ctx context.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error)
+	ShouldRun(ctx stdcontext.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error)
 }
 
 // Decision is the declarative output of a routing policy.
 type Decision struct {
 	Run     bool
-	Context []ContextFile
+	Context []context.ContextFile
 }
 
 // PolicyScope is the capability surface policies may use to route and to
 // resolve related staged context for a deep specialist review.
 type PolicyScope interface {
-	RunRouter(ctx context.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (bool, error)
-	ResolveStagedContext(ctx context.Context, changes change.ChangeSet) ([]ContextFile, error)
+	RunRouter(ctx stdcontext.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (bool, error)
+	ResolveStagedContext(ctx stdcontext.Context, changes change.ChangeSet) ([]context.ContextFile, error)
 }
 
 // AlwaysRun routes every eligible change to its agent.
 type AlwaysRun struct{}
 
-func (AlwaysRun) ShouldRun(context.Context, change.ChangeSet, []findings.Finding, *ReviewResult, *int, PolicyScope) (Decision, error) {
+func (AlwaysRun) ShouldRun(stdcontext.Context, change.ChangeSet, []findings.Finding, *ReviewResult, *int, PolicyScope) (Decision, error) {
 	return Decision{Run: true}, nil
 }
 
@@ -66,7 +67,7 @@ type SecurityEscalationPolicy struct {
 	Router AgentSpec
 }
 
-func (p SecurityEscalationPolicy) ShouldRun(ctx context.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error) {
+func (p SecurityEscalationPolicy) ShouldRun(ctx stdcontext.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error) {
 	if RequiresSecurityReview(changes) {
 		return Decision{Run: true}, nil
 	}

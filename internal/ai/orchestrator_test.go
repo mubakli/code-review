@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"code-review/internal/ai"
-	"code-review/internal/ai/providers/mock"
+	aicontext "code-review/internal/ai/context"
+	"code-review/internal/ai/provider"
+	"code-review/internal/ai/request"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 	"code-review/internal/redact"
@@ -16,7 +18,7 @@ import (
 func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 	t.Parallel()
 
-	builder := newBuilder(t, ai.DefaultBudget())
+	builder := newPreparer(t, aicontext.DefaultBudget())
 	secret := "actual-secret-value"
 	changes := addedFile("service.go", []string{
 		"package service",
@@ -25,7 +27,7 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 	})
 	local := localFinding("service.go", 2, "Potential provider credential", "An added line matches a credential format.")
 	providerCalls := 0
-	provider := mock.Provider{AnalyzeFunc: func(_ context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{AnalyzeFunc: func(_ context.Context, request request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 		providerCalls++
 		if strings.Contains(request.Diff(), secret) || !strings.Contains(request.Diff(), redact.Placeholder) {
 			t.Fatalf("provider received unredacted diff:\n%s", request.Diff())
@@ -33,9 +35,9 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 		if len(request.StaticFindings()) != 1 {
 			t.Fatalf("provider received %d static findings, want 1", len(request.StaticFindings()))
 		}
-		return &ai.AnalysisResponse{
-			Status: ai.ResponseStatusComplete,
-			Findings: []ai.ResponseFinding{
+		return &provider.AnalysisResponse{
+			Status: provider.ResponseStatusComplete,
+			Findings: []provider.ResponseFinding{
 				{
 					File:       "service.go",
 					StartLine:  2,
@@ -67,7 +69,7 @@ func TestOrchestratorValidatesMergesAndDeduplicates(t *testing.T) {
 		}, nil
 	}}
 	agents, _ := ai.SelectAgents([]string{"correctness", "security"})
-	orchestrator, err := ai.NewOrchestratorWithAgents(builder, provider, agents)
+	orchestrator, err := ai.NewOrchestratorWithAgents(builder, request.RequestBuilder{}, provider, agents)
 	if err != nil {
 		t.Fatalf("NewOrchestratorWithAgents() error = %v", err)
 	}
@@ -110,7 +112,7 @@ func TestOrchestratorRejectsInvalidResponsesWithoutLosingLocalFindings(t *testin
 
 	changes := addedFile("service.go", []string{"unchanged-looking context", "changed()"})
 	local := localFinding("service.go", 2, "Local issue", "A deterministic local issue.")
-	validCandidate := ai.ResponseFinding{
+	validCandidate := provider.ResponseFinding{
 		File:       "service.go",
 		StartLine:  2,
 		EndLine:    2,
@@ -122,26 +124,26 @@ func TestOrchestratorRejectsInvalidResponsesWithoutLosingLocalFindings(t *testin
 	}
 	tests := []struct {
 		name     string
-		response *ai.AnalysisResponse
+		response *provider.AnalysisResponse
 	}{
 		{name: "nil response", response: nil},
-		{name: "unknown status", response: &ai.AnalysisResponse{Status: "need_context"}},
-		{name: "outside file", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withFile(validCandidate, "other.go")}}},
-		{name: "unchanged line", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withLine(validCandidate, 99)}}},
-		{name: "range includes unchanged line", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withRange(validCandidate, 2, 3)}}},
-		{name: "invalid severity", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withSeverity(validCandidate, "unknown")}}},
-		{name: "fix range differs", response: &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{withFix(validCandidate, &findings.ProposedFix{Description: "Replace line.", StartLine: 1, EndLine: 1, Replacement: "changed()"})}}},
+		{name: "unknown status", response: &provider.AnalysisResponse{Status: "need_context"}},
+		{name: "outside file", response: &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{withFile(validCandidate, "other.go")}}},
+		{name: "unchanged line", response: &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{withLine(validCandidate, 99)}}},
+		{name: "range includes unchanged line", response: &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{withRange(validCandidate, 2, 3)}}},
+		{name: "invalid severity", response: &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{withSeverity(validCandidate, "unknown")}}},
+		{name: "fix range differs", response: &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{withFix(validCandidate, &findings.ProposedFix{Description: "Replace line.", StartLine: 1, EndLine: 1, Replacement: "changed()"})}}},
 	}
 
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			provider := mock.Provider{AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+			provider := provider.Mock{AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 				return test.response, nil
 			}}
 			agents, _ := ai.SelectAgents([]string{"correctness"})
-			orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+			orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
 			result, err := orchestrator.Review(context.Background(), changes, []findings.Finding{local})
 			if err != nil {
 				t.Fatalf("Review() error = %v", err)
@@ -159,23 +161,23 @@ func TestOrchestratorRejectsInvalidResponsesWithoutLosingLocalFindings(t *testin
 func TestOrchestratorContinuesAfterProviderFailure(t *testing.T) {
 	t.Parallel()
 
-	budget := ai.Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
-	builder := newBuilder(t, budget)
+	budget := aicontext.Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
+	builder := newPreparer(t, budget)
 	lines := make([]string, 30)
 	for index := range lines {
 		lines[index] = "changed line with enough content to split batches"
 	}
 	changes := addedFile("large.ts", lines)
 	calls := 0
-	provider := mock.Provider{AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 		calls++
 		if calls == 1 {
 			return nil, errors.New("provider unavailable")
 		}
-		return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete, Findings: []ai.ResponseFinding{}}, nil
+		return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete, Findings: []provider.ResponseFinding{}}, nil
 	}}
 	agents, _ := ai.SelectAgents([]string{"correctness"})
-	orchestrator, _ := ai.NewOrchestratorWithAgents(builder, provider, agents)
+	orchestrator, _ := ai.NewOrchestratorWithAgents(builder, request.RequestBuilder{}, provider, agents)
 
 	result, err := orchestrator.Review(context.Background(), changes, nil)
 	if err != nil {
@@ -193,12 +195,12 @@ func TestOrchestratorHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
 	providerCalled := false
-	provider := mock.Provider{AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 		providerCalled = true
-		return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+		return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 	}}
 	agents, _ := ai.SelectAgents([]string{"correctness"})
-	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -214,7 +216,7 @@ func TestOrchestratorHonorsCancellation(t *testing.T) {
 func TestNewOrchestratorRequiresProvider(t *testing.T) {
 	t.Parallel()
 
-	if _, err := ai.NewOrchestrator(newBuilder(t, ai.DefaultBudget()), nil); err == nil {
+	if _, err := ai.NewOrchestrator(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, nil); err == nil {
 		t.Fatal("NewOrchestrator() error = nil")
 	}
 }
@@ -222,7 +224,7 @@ func TestNewOrchestratorRequiresProvider(t *testing.T) {
 func TestNewOrchestratorRejectsRouterAgentsInTheReviewLoop(t *testing.T) {
 	t.Parallel()
 
-	_, err := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), mock.Provider{}, []ai.AgentSpec{ai.SecurityTriageRouter})
+	_, err := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider.Mock{}, []ai.AgentSpec{ai.SecurityTriageRouter})
 	if err == nil {
 		t.Fatal("NewOrchestratorWithAgents() error = nil for a router agent")
 	}
@@ -235,7 +237,7 @@ func TestNewOrchestratorRequiresRoutingPolicy(t *testing.T) {
 		ID:   ai.AgentCorrectness,
 		Role: ai.RoleAnalyzer,
 	}}
-	if _, err := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), mock.Provider{}, agents); err == nil {
+	if _, err := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider.Mock{}, agents); err == nil {
 		t.Fatal("NewOrchestratorWithAgents() error = nil for an agent without a policy")
 	}
 }
@@ -245,18 +247,18 @@ func TestSecurityPipelineSkipsRouterOnDeterministicSignal(t *testing.T) {
 
 	changes := addedFile("service.go", []string{`password := request.FormValue("password")`})
 	triageCalled := false
-	provider := mock.Provider{
-		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
-			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+	provider := provider.Mock{
+		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
+			return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 		},
-		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
+		TriageFunc: func(context.Context, request.AnalysisRequest) (*provider.TriageResponse, error) {
 			triageCalled = true
 			t.Fatal("triage router ran despite a deterministic security signal")
 			return nil, nil
 		},
 	}
 	agents, _ := ai.SelectAgents([]string{"security"})
-	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
 
 	result, err := orchestrator.Review(context.Background(), changes, nil)
 	if err != nil {
@@ -277,14 +279,14 @@ func TestSecurityPipelineSkipsDeepReviewWhenTriageClears(t *testing.T) {
 	t.Parallel()
 
 	changes := addedFile("service.go", []string{"return result"})
-	provider := mock.Provider{
-		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{
+		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 			t.Fatal("deep security Analyze was called unexpectedly")
 			return nil, nil
 		},
 	}
 	agents, _ := ai.SelectAgents([]string{"security"})
-	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
 
 	result, err := orchestrator.Review(context.Background(), changes, nil)
 	if err != nil {
@@ -303,14 +305,14 @@ func TestSecurityPipelineEscalatesOnTriageDecision(t *testing.T) {
 
 	changes := addedFile("service.go", []string{"return result"})
 	securityCalled := false
-	provider := mock.Provider{
-		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{
+		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 			securityCalled = true
-			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+			return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 		},
-		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
-			return &ai.TriageResponse{
-				Status:    ai.ResponseStatusComplete,
+		TriageFunc: func(context.Context, request.AnalysisRequest) (*provider.TriageResponse, error) {
+			return &provider.TriageResponse{
+				Status:    provider.ResponseStatusComplete,
 				Escalate:  true,
 				Surfaces:  []string{"user-controlled input reaches a database query built by string concatenation"},
 				Rationale: "The surface awaits confirmation; enforcement such as authorization middleware may live outside this diff.",
@@ -318,7 +320,7 @@ func TestSecurityPipelineEscalatesOnTriageDecision(t *testing.T) {
 		},
 	}
 	agents, _ := ai.SelectAgents([]string{"security"})
-	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
 
 	result, err := orchestrator.Review(context.Background(), changes, nil)
 	if err != nil {
@@ -340,17 +342,17 @@ func TestSecurityPipelineFailClosedOnTriageError(t *testing.T) {
 
 	changes := addedFile("service.go", []string{"return result"})
 	securityCalled := false
-	provider := mock.Provider{
-		AnalyzeFunc: func(context.Context, ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{
+		AnalyzeFunc: func(context.Context, request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 			securityCalled = true
-			return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+			return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 		},
-		TriageFunc: func(context.Context, ai.AnalysisRequest) (*ai.TriageResponse, error) {
+		TriageFunc: func(context.Context, request.AnalysisRequest) (*provider.TriageResponse, error) {
 			return nil, errors.New("triage provider unavailable")
 		},
 	}
 	agents, _ := ai.SelectAgents([]string{"security"})
-	orchestrator, _ := ai.NewOrchestratorWithAgents(newBuilder(t, ai.DefaultBudget()), provider, agents)
+	orchestrator, _ := ai.NewOrchestratorWithAgents(newPreparer(t, aicontext.DefaultBudget()), request.RequestBuilder{}, provider, agents)
 
 	result, err := orchestrator.Review(context.Background(), changes, nil)
 	if err != nil {
@@ -367,13 +369,13 @@ func TestSecurityPipelineFailClosedOnTriageError(t *testing.T) {
 	}
 }
 
-func newBuilder(t *testing.T, budget ai.Budget) ai.Builder {
+func newPreparer(t *testing.T, budget aicontext.Budget) aicontext.Preparer {
 	t.Helper()
-	builder, err := ai.New(budget)
+	preparer, err := aicontext.NewPreparer(budget)
 	if err != nil {
-		t.Fatalf("ai.New() error = %v", err)
+		t.Fatalf("aicontext.NewPreparer() error = %v", err)
 	}
-	return builder
+	return preparer
 }
 
 func addedFile(path string, additions []string) change.ChangeSet {
@@ -429,29 +431,29 @@ func containsAgent(agents []string, id string) bool {
 	return false
 }
 
-func withFile(value ai.ResponseFinding, file string) ai.ResponseFinding {
+func withFile(value provider.ResponseFinding, file string) provider.ResponseFinding {
 	value.File = file
 	return value
 }
 
-func withLine(value ai.ResponseFinding, line int) ai.ResponseFinding {
+func withLine(value provider.ResponseFinding, line int) provider.ResponseFinding {
 	value.StartLine = line
 	value.EndLine = line
 	return value
 }
 
-func withSeverity(value ai.ResponseFinding, severity findings.Severity) ai.ResponseFinding {
+func withSeverity(value provider.ResponseFinding, severity findings.Severity) provider.ResponseFinding {
 	value.Severity = severity
 	return value
 }
 
-func withRange(value ai.ResponseFinding, start, end int) ai.ResponseFinding {
+func withRange(value provider.ResponseFinding, start, end int) provider.ResponseFinding {
 	value.StartLine = start
 	value.EndLine = end
 	return value
 }
 
-func withFix(value ai.ResponseFinding, fix *findings.ProposedFix) ai.ResponseFinding {
+func withFix(value provider.ResponseFinding, fix *findings.ProposedFix) provider.ResponseFinding {
 	value.ProposedFix = fix
 	return value
 }

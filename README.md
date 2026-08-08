@@ -32,8 +32,8 @@ value is never copied into output.
 
 Code intended for an AI provider passes through a separate,
 language-agnostic redaction boundary. Provider requests cannot directly set raw
-diff content; `ai.Builder` redacts it locally before exposing a request to a
-provider implementation.
+diff content; the context layer redacts and budgets it, and the request layer
+redacts it again before exposing a request to a provider implementation.
 
 The provider preparation path is also language-independent:
 
@@ -164,12 +164,15 @@ configuration will be added with the context engine.
 - `internal/analyzers/secrets` is a concrete deterministic analyzer.
 - `internal/findings` defines the shared finding contract.
 - `internal/redact` removes secret material before any future provider request.
-- `internal/ai` owns safe requests, token budgeting, batching, and the
-  vendor-neutral provider boundary and resilient orchestration.
-- `internal/ai/providers/mock` provides deterministic orchestration tests.
-- `internal/ai/providers/openai` is the first real provider adapter.
-- `internal/ai/providers/deepseek` implements the bounded DeepSeek Chat
-  Completions adapter behind the same provider-neutral contract.
+- `internal/ai` owns the declarative agent model, routing policies, and
+  provider-neutral orchestration.
+- `internal/ai/context` extracts, redacts, token-budgets, and batches a change
+  set; it never talks to providers.
+- `internal/ai/request` converts one prepared batch into a provider-neutral
+  `AnalysisRequest` with a final redaction pass.
+- `internal/ai/provider` defines the provider boundary, the mock test adapter,
+  the OpenAI Responses adapter, and the bounded DeepSeek Chat Completions
+  adapter behind the same provider-neutral contract.
 - `internal/config` validates safe provider and model settings and never stores
   API keys.
 - `internal/output` renders stable JSON or terminal output.

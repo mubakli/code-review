@@ -1,7 +1,7 @@
-package openai
+package provider
 
 import (
-	"context"
+	stdcontext "context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,13 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"code-review/internal/ai"
-	"code-review/internal/change"
 	"code-review/internal/findings"
 	"code-review/internal/redact"
 )
 
-func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
+func TestOpenAIAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 	t.Parallel()
 
 	apiKey := "test-api-key"
@@ -64,9 +62,9 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 			}
 		}
 
-		structured, err := json.Marshal(ai.AnalysisResponse{
-			Status: ai.ResponseStatusComplete,
-			Findings: []ai.ResponseFinding{{
+		structured, err := json.Marshal(AnalysisResponse{
+			Status: ResponseStatusComplete,
+			Findings: []ResponseFinding{{
 				File:       "service.go",
 				StartLine:  2,
 				EndLine:    2,
@@ -100,7 +98,7 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := New(Options{
+	instance, err := NewOpenAI(OpenAIOptions{
 		APIKey:          apiKey,
 		Model:           "review-model",
 		Endpoint:        server.URL + "/v1/responses",
@@ -108,13 +106,13 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 		HTTPClient:      server.Client(),
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewOpenAI() error = %v", err)
 	}
-	response, err := provider.Analyze(context.Background(), preparedRequest(t, secret))
+	response, err := instance.Analyze(stdcontext.Background(), preparedRequest(t, secret))
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
-	if response.Status != ai.ResponseStatusComplete || len(response.Findings) != 1 {
+	if response.Status != ResponseStatusComplete || len(response.Findings) != 1 {
 		t.Fatalf("response = %#v", response)
 	}
 	if response.Findings[0].ProposedFix == nil || response.Findings[0].ProposedFix.Replacement != "password = loadSecret()" {
@@ -122,7 +120,7 @@ func TestProviderAnalyzeUsesPrivateStructuredRequest(t *testing.T) {
 	}
 }
 
-func TestProviderReturnsBoundedAPIErrorWithoutKey(t *testing.T) {
+func TestOpenAIReturnsBoundedAPIErrorWithoutKey(t *testing.T) {
 	t.Parallel()
 
 	apiKey := "must-not-appear-in-error"
@@ -131,99 +129,69 @@ func TestProviderReturnsBoundedAPIErrorWithoutKey(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"error": map[string]any{"message": "rate limit exceeded for " + apiKey}})
 	}))
 	defer server.Close()
-	provider, err := New(Options{APIKey: apiKey, Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
+	instance, err := NewOpenAI(OpenAIOptions{APIKey: apiKey, Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewOpenAI() error = %v", err)
 	}
-	_, err = provider.Analyze(context.Background(), preparedRequest(t, "secret-value"))
+	_, err = instance.Analyze(stdcontext.Background(), preparedRequest(t, "secret-value"))
 	if err == nil || !strings.Contains(err.Error(), "HTTP 429") || strings.Contains(err.Error(), apiKey) {
 		t.Fatalf("Analyze() error = %v", err)
 	}
 }
 
-func TestProviderRejectsMalformedStructuredOutput(t *testing.T) {
+func TestOpenAIRejectsMalformedStructuredOutput(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"output_text": `{"status":"complete","findings":[],"unexpected":true}`})
 	}))
 	defer server.Close()
-	provider, err := New(Options{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
+	instance, err := NewOpenAI(OpenAIOptions{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewOpenAI() error = %v", err)
 	}
-	if _, err := provider.Analyze(context.Background(), preparedRequest(t, "secret-value")); err == nil {
+	if _, err := instance.Analyze(stdcontext.Background(), preparedRequest(t, "secret-value")); err == nil {
 		t.Fatal("Analyze() error = nil")
 	}
 }
 
-func TestProviderHonorsCancellation(t *testing.T) {
+func TestOpenAIHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
-	provider, err := New(Options{APIKey: "test-key", Model: "review-model"})
+	instance, err := NewOpenAI(OpenAIOptions{APIKey: "test-key", Model: "review-model"})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewOpenAI() error = %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	cancel()
-	_, err = provider.Analyze(ctx, preparedRequest(t, "secret-value"))
-	if !errors.Is(err, context.Canceled) {
+	_, err = instance.Analyze(ctx, preparedRequest(t, "secret-value"))
+	if !errors.Is(err, stdcontext.Canceled) {
 		t.Fatalf("Analyze() error = %v, want context.Canceled", err)
 	}
 }
 
-func TestNewRejectsUnsafeOrIncompleteOptions(t *testing.T) {
+func TestNewOpenAIRejectsUnsafeOrIncompleteOptions(t *testing.T) {
 	t.Parallel()
 
-	tests := []Options{
+	tests := []OpenAIOptions{
 		{Model: "review-model"},
 		{APIKey: "test-key"},
 		{APIKey: "test-key", Model: "review-model", Endpoint: "http://example.com/v1/responses"},
 		{APIKey: "test-key", Model: "review-model", MaxOutputTokens: -1},
 	}
 	for _, options := range tests {
-		if _, err := New(options); err == nil {
-			t.Errorf("New(%+v) error = nil", options)
+		if _, err := NewOpenAI(options); err == nil {
+			t.Errorf("NewOpenAI(%+v) error = nil", options)
 		}
 	}
 }
 
-func preparedRequest(t *testing.T, secret string) ai.AnalysisRequest {
-	t.Helper()
-	builder, err := ai.New(ai.DefaultBudget())
-	if err != nil {
-		t.Fatalf("ai.New() error = %v", err)
-	}
-	changes := change.ChangeSet{Files: []change.FileChange{{
-		NewPath: "service.go",
-		Status:  change.StatusAdded,
-		Hunks: []change.Hunk{{
-			OldStart: 0,
-			OldLines: 0,
-			NewStart: 1,
-			NewLines: 2,
-			Lines: []change.Line{
-				{Kind: change.LineAdded, NewLine: 1, Content: "package service"},
-				{Kind: change.LineAdded, NewLine: 2, Content: `password = "` + secret + `"`},
-			},
-		}},
-	}}}
-	batches, err := builder.Build(context.Background(), changes, nil, nil)
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	if len(batches) != 1 {
-		t.Fatalf("len(batches) = %d, want 1", len(batches))
-	}
-	return batches[0].Request
-}
-
-func TestProviderTriageProducesStructuredDecision(t *testing.T) {
+func TestOpenAITriageProducesStructuredDecision(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		structured, err := json.Marshal(ai.TriageResponse{
-			Status:    ai.ResponseStatusComplete,
+		structured, err := json.Marshal(TriageResponse{
+			Status:    ResponseStatusComplete,
 			Escalate:  true,
 			Surfaces:  []string{"input handling", "command execution"},
 			Rationale: "User input reaches an exec call.",
@@ -236,11 +204,11 @@ func TestProviderTriageProducesStructuredDecision(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := New(Options{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
+	instance, err := NewOpenAI(OpenAIOptions{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewOpenAI() error = %v", err)
 	}
-	response, err := provider.Triage(context.Background(), preparedRequest(t, "test-secret"))
+	response, err := instance.Triage(stdcontext.Background(), preparedRequest(t, "test-secret"))
 	if err != nil {
 		t.Fatalf("Triage() error = %v", err)
 	}
@@ -249,18 +217,18 @@ func TestProviderTriageProducesStructuredDecision(t *testing.T) {
 	}
 }
 
-func TestProviderRejectsMalformedTriageOutput(t *testing.T) {
+func TestOpenAIRejectsMalformedTriageOutput(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"output_text": `{"status":"complete","escalate":true,"unexpected":true}`})
 	}))
 	defer server.Close()
-	provider, err := New(Options{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
+	instance, err := NewOpenAI(OpenAIOptions{APIKey: "test-key", Model: "review-model", Endpoint: server.URL, HTTPClient: server.Client()})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewOpenAI() error = %v", err)
 	}
-	_, err = provider.Triage(context.Background(), preparedRequest(t, "test-secret"))
+	_, err = instance.Triage(stdcontext.Background(), preparedRequest(t, "test-secret"))
 	if err == nil {
 		t.Fatal("Triage() error = nil for malformed output")
 	}

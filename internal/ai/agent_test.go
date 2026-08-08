@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"code-review/internal/ai"
+	aicontext "code-review/internal/ai/context"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
@@ -213,7 +214,7 @@ func (s *fakePolicyScope) RunRouter(context.Context, ai.AgentSpec, change.Change
 	return s.routerEscalate, nil
 }
 
-func (s *fakePolicyScope) ResolveStagedContext(_ context.Context, changes change.ChangeSet) ([]ai.ContextFile, error) {
+func (s *fakePolicyScope) ResolveStagedContext(_ context.Context, changes change.ChangeSet) ([]aicontext.ContextFile, error) {
 	s.contextResolves++
-	return []ai.ContextFile{{Path: changes.Files[0].Path(), Content: "staged content"}}, nil
+	return []aicontext.ContextFile{{Path: changes.Files[0].Path(), Content: "staged content"}}, nil
 }

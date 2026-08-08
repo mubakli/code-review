@@ -1,14 +1,15 @@
 package main
 
 import (
-	"context"
+	stdcontext "context"
 	"fmt"
 	"os"
 	"strings"
 
 	"code-review/internal/ai"
-	"code-review/internal/ai/providers/deepseek"
-	"code-review/internal/ai/providers/openai"
+	aicontext "code-review/internal/ai/context"
+	"code-review/internal/ai/provider"
+	"code-review/internal/ai/request"
 	"code-review/internal/analyzers/secrets"
 	"code-review/internal/change"
 	"code-review/internal/config"
@@ -25,13 +26,13 @@ const (
 type reviewOptions struct {
 	ExtraExcludes []string
 	AI            config.AI
-	Provider      ai.Provider
+	Provider      provider.Provider
 	ExpectedID    string
 }
 
 // reviewStaged is the composition root for the staged-review use case. Concrete
 // adapters belong here rather than inside the application service.
-func reviewStaged(ctx context.Context, repositoryPath string, options reviewOptions) (review.Result, error) {
+func reviewStaged(ctx stdcontext.Context, repositoryPath string, options reviewOptions) (review.Result, error) {
 	if err := options.AI.Validate(); err != nil {
 		return review.Result{}, err
 	}
@@ -64,22 +65,22 @@ func reviewStaged(ctx context.Context, repositoryPath string, options reviewOpti
 		return result, err
 	}
 
-	provider := options.Provider
-	if provider == nil {
-		provider, err = configuredProvider(options.AI)
+	providerInstance := options.Provider
+	if providerInstance == nil {
+		providerInstance, err = configuredProvider(options.AI)
 		if err != nil {
 			return review.Result{}, err
 		}
 	}
-	builder, err := ai.New(ai.DefaultBudget())
+	preparer, err := aicontext.NewPreparer(aicontext.DefaultBudget())
 	if err != nil {
-		return review.Result{}, fmt.Errorf("configure AI prompt builder: %w", err)
+		return review.Result{}, fmt.Errorf("configure AI context preparer: %w", err)
 	}
 	agents, err := ai.SelectAgents(options.AI.Agents)
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI review agents: %w", err)
 	}
-	orchestrator, err := ai.NewOrchestratorWithAgentsAndResolver(builder, provider, agents, stagedContextResolver{repository})
+	orchestrator, err := ai.NewOrchestratorWithAgentsAndResolver(preparer, request.RequestBuilder{}, providerInstance, agents, stagedContextResolver{repository})
 	if err != nil {
 		return review.Result{}, fmt.Errorf("configure AI orchestrator: %w", err)
 	}
@@ -122,14 +123,14 @@ func aiEgressChanges(changes change.ChangeSet) change.ChangeSet {
 	return filtered
 }
 
-func configuredProvider(providerConfig config.AI) (ai.Provider, error) {
+func configuredProvider(providerConfig config.AI) (provider.Provider, error) {
 	switch providerConfig.Provider {
 	case config.AIProviderOpenAI:
 		apiKey := strings.TrimSpace(os.Getenv(openAIAPIKeyEnvironment))
 		if apiKey == "" {
 			return nil, fmt.Errorf("%s is required for OpenAI review", openAIAPIKeyEnvironment)
 		}
-		provider, err := openai.New(openai.Options{
+		providerInstance, err := provider.NewOpenAI(provider.OpenAIOptions{
 			APIKey:          apiKey,
 			Model:           providerConfig.Model,
 			MaxOutputTokens: providerConfig.MaxOutputTokens,
@@ -137,13 +138,13 @@ func configuredProvider(providerConfig config.AI) (ai.Provider, error) {
 		if err != nil {
 			return nil, fmt.Errorf("configure OpenAI provider: %w", err)
 		}
-		return provider, nil
+		return providerInstance, nil
 	case config.AIProviderDeepSeek:
 		apiKey := strings.TrimSpace(os.Getenv(deepSeekAPIKeyEnvironment))
 		if apiKey == "" {
 			return nil, fmt.Errorf("%s is required for DeepSeek review", deepSeekAPIKeyEnvironment)
 		}
-		provider, err := deepseek.New(deepseek.Options{
+		providerInstance, err := provider.NewDeepSeek(provider.DeepSeekOptions{
 			APIKey:          apiKey,
 			Model:           providerConfig.Model,
 			MaxOutputTokens: providerConfig.MaxOutputTokens,
@@ -151,7 +152,7 @@ func configuredProvider(providerConfig config.AI) (ai.Provider, error) {
 		if err != nil {
 			return nil, fmt.Errorf("configure DeepSeek provider: %w", err)
 		}
-		return provider, nil
+		return providerInstance, nil
 	default:
 		return nil, fmt.Errorf("unsupported enabled AI provider %q", providerConfig.Provider)
 	}
@@ -161,9 +162,9 @@ type stagedContextResolver struct {
 	repository *git.Repository
 }
 
-func (r stagedContextResolver) ResolveStagedContext(ctx context.Context, paths []string) ([]ai.ContextFile, error) {
+func (r stagedContextResolver) ResolveStagedContext(ctx stdcontext.Context, paths []string) ([]aicontext.ContextFile, error) {
 	matcher := pathfilter.New(pathfilter.DefaultAIEgressPatterns())
-	files := make([]ai.ContextFile, 0, len(paths))
+	files := make([]aicontext.ContextFile, 0, len(paths))
 	for _, p := range paths {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -175,7 +176,7 @@ func (r stagedContextResolver) ResolveStagedContext(ctx context.Context, paths [
 		if err != nil {
 			continue
 		}
-		files = append(files, ai.ContextFile{Path: p, Content: content})
+		files = append(files, aicontext.ContextFile{Path: p, Content: content})
 	}
 	return files, nil
 }

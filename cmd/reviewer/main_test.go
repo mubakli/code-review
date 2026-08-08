@@ -11,7 +11,8 @@ import (
 	"testing"
 
 	"code-review/internal/ai"
-	"code-review/internal/ai/providers/mock"
+	"code-review/internal/ai/provider"
+	"code-review/internal/ai/request"
 	"code-review/internal/config"
 	"code-review/internal/findings"
 	"code-review/internal/review"
@@ -300,10 +301,10 @@ func TestReviewStagedRunsConfiguredAIProvider(t *testing.T) {
 	runTestGit(t, repository, "init", "--quiet")
 	writeSource(t, repository, "main.go", "package main\n\nfunc run() {}\n")
 	runTestGit(t, repository, "add", "--", "main.go")
-	provider := mock.Provider{AnalyzeFunc: func(_ context.Context, _ ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
-		return &ai.AnalysisResponse{
-			Status: ai.ResponseStatusComplete,
-			Findings: []ai.ResponseFinding{{
+	provider := provider.Mock{AnalyzeFunc: func(_ context.Context, _ request.AnalysisRequest) (*provider.AnalysisResponse, error) {
+		return &provider.AnalysisResponse{
+			Status: provider.ResponseStatusComplete,
+			Findings: []provider.ResponseFinding{{
 				File:       "main.go",
 				StartLine:  3,
 				EndLine:    3,
@@ -347,7 +348,7 @@ func TestReviewStagedNeverSendsEnvironmentFilesToAI(t *testing.T) {
 	runTestGit(t, repository, "add", "-f", "--", ".env", "main.go")
 
 	providerCalls := 0
-	provider := mock.Provider{AnalyzeFunc: func(_ context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+	provider := provider.Mock{AnalyzeFunc: func(_ context.Context, request request.AnalysisRequest) (*provider.AnalysisResponse, error) {
 		providerCalls++
 		if strings.Contains(request.Diff(), ".env") || strings.Contains(request.Diff(), "correct-horse-battery") {
 			t.Fatalf("provider received environment file content:\n%s", request.Diff())
@@ -358,7 +359,7 @@ func TestReviewStagedNeverSendsEnvironmentFilesToAI(t *testing.T) {
 		if len(request.StaticFindings()) != 0 {
 			t.Fatalf("provider received environment-file findings: %#v", request.StaticFindings())
 		}
-		return &ai.AnalysisResponse{Status: ai.ResponseStatusComplete}, nil
+		return &provider.AnalysisResponse{Status: provider.ResponseStatusComplete}, nil
 	}}
 
 	result, err := reviewStaged(context.Background(), repository, reviewOptions{

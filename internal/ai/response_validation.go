@@ -3,6 +3,7 @@ package ai
 import (
 	"fmt"
 
+	"code-review/internal/ai/provider"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
@@ -11,11 +12,11 @@ import (
 // structurally valid, scoped to the batch's files, and anchored to lines the
 // agent was allowed to change. Unsupported categories are dropped rather than
 // trusted.
-func validateResponse(response *AnalysisResponse, batchFiles []string, eligibleLines map[string]map[int]struct{}, agent AgentSpec) ([]findings.Finding, error) {
+func validateResponse(response *provider.AnalysisResponse, batchFiles []string, eligibleLines map[string]map[int]struct{}, agent AgentSpec) ([]findings.Finding, error) {
 	if response == nil {
 		return nil, fmt.Errorf("provider returned an empty response")
 	}
-	if response.Status != ResponseStatusComplete {
+	if response.Status != provider.ResponseStatusComplete {
 		return nil, fmt.Errorf("unsupported response status %q", response.Status)
 	}
 

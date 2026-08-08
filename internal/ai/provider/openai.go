@@ -1,29 +1,23 @@
-package openai
+package provider
 
 import (
 	"bytes"
-	"context"
+	stdcontext "context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
-	"code-review/internal/ai"
+	"code-review/internal/ai/context"
+	"code-review/internal/ai/request"
 	"code-review/internal/findings"
 )
 
-const (
-	defaultEndpoint        = "https://api.openai.com/v1/responses"
-	defaultMaxOutputTokens = 4096
-	triageMaxOutputTokens  = 512
-	maxResponseBytes       = 4 << 20
-)
+const openAIEndpoint = "https://api.openai.com/v1/responses"
 
-type Options struct {
+type OpenAIOptions struct {
 	APIKey          string
 	Model           string
 	Endpoint        string
@@ -31,7 +25,9 @@ type Options struct {
 	HTTPClient      *http.Client
 }
 
-type Provider struct {
+// OpenAI executes analysis and triage requests against the OpenAI Responses
+// API and normalizes the raw output into the common structured responses.
+type OpenAI struct {
 	apiKey          string
 	model           string
 	endpoint        string
@@ -39,9 +35,9 @@ type Provider struct {
 	client          *http.Client
 }
 
-var _ ai.Provider = (*Provider)(nil)
+var _ Provider = (*OpenAI)(nil)
 
-func New(options Options) (*Provider, error) {
+func NewOpenAI(options OpenAIOptions) (*OpenAI, error) {
 	apiKey := strings.TrimSpace(options.APIKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
@@ -52,9 +48,9 @@ func New(options Options) (*Provider, error) {
 	}
 	endpoint := strings.TrimSpace(options.Endpoint)
 	if endpoint == "" {
-		endpoint = defaultEndpoint
+		endpoint = openAIEndpoint
 	}
-	if err := validateEndpoint(endpoint); err != nil {
+	if err := validateOpenAIEndpoint(endpoint); err != nil {
 		return nil, err
 	}
 	maxOutputTokens := options.MaxOutputTokens
@@ -68,7 +64,7 @@ func New(options Options) (*Provider, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
-	return &Provider{
+	return &OpenAI{
 		apiKey:          apiKey,
 		model:           model,
 		endpoint:        endpoint,
@@ -77,19 +73,11 @@ func New(options Options) (*Provider, error) {
 	}, nil
 }
 
-func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
-	return p.analyze(ctx, request)
-}
-
-func (p *Provider) analyze(ctx context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+func (p *OpenAI) Analyze(ctx stdcontext.Context, request request.AnalysisRequest) (*AnalysisResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	input, err := json.Marshal(struct {
-		Diff           string             `json:"diff"`
-		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
-		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
-	}{
+	input, err := json.Marshal(requestInput{
 		Diff:           request.Diff(),
 		StaticFindings: request.StaticFindings(),
 		RelatedContext: request.ContextFiles(),
@@ -119,25 +107,21 @@ func (p *Provider) analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	}
 	decoder := json.NewDecoder(strings.NewReader(outputText))
 	decoder.DisallowUnknownFields()
-	var analysis ai.AnalysisResponse
+	var analysis AnalysisResponse
 	if err := decoder.Decode(&analysis); err != nil {
 		return nil, fmt.Errorf("decode OpenAI structured review: %w", err)
 	}
-	if err := ensureJSONEnd(decoder); err != nil {
+	if err := ensureJSONEnd(decoder, "OpenAI"); err != nil {
 		return nil, err
 	}
 	return &analysis, nil
 }
 
-func (p *Provider) Triage(ctx context.Context, request ai.AnalysisRequest) (*ai.TriageResponse, error) {
+func (p *OpenAI) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*TriageResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	input, err := json.Marshal(struct {
-		Diff           string             `json:"diff"`
-		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
-		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
-	}{
+	input, err := json.Marshal(requestInput{
 		Diff:           request.Diff(),
 		StaticFindings: request.StaticFindings(),
 		RelatedContext: request.ContextFiles(),
@@ -167,17 +151,17 @@ func (p *Provider) Triage(ctx context.Context, request ai.AnalysisRequest) (*ai.
 	}
 	decoder := json.NewDecoder(strings.NewReader(outputText))
 	decoder.DisallowUnknownFields()
-	var triage ai.TriageResponse
+	var triage TriageResponse
 	if err := decoder.Decode(&triage); err != nil {
 		return nil, fmt.Errorf("decode OpenAI structured triage: %w", err)
 	}
-	if err := ensureJSONEnd(decoder); err != nil {
+	if err := ensureJSONEnd(decoder, "OpenAI"); err != nil {
 		return nil, err
 	}
 	return &triage, nil
 }
 
-func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
+func (p *OpenAI) post(ctx stdcontext.Context, payload []byte) (string, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("create OpenAI request: %w", err)
@@ -199,7 +183,7 @@ func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
 		return "", fmt.Errorf("read OpenAI response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", apiError(response.StatusCode, body, p.apiKey)
+		return "", apiError("OpenAI", response.StatusCode, body, p.apiKey)
 	}
 
 	var envelope responsesEnvelope
@@ -224,6 +208,12 @@ func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
 		return "", fmt.Errorf("OpenAI response contains no output text")
 	}
 	return outputText, nil
+}
+
+type requestInput struct {
+	Diff           string                `json:"diff"`
+	StaticFindings []findings.Finding    `json:"staticFindings,omitempty"`
+	RelatedContext []context.ContextFile `json:"relatedContext,omitempty"`
 }
 
 type responsesRequest struct {
@@ -264,7 +254,7 @@ func responseSchema() map[string]any {
 		"properties": map[string]any{
 			"status": map[string]any{
 				"type": "string",
-				"enum": []string{string(ai.ResponseStatusComplete)},
+				"enum": []string{string(ResponseStatusComplete)},
 			},
 			"findings": map[string]any{
 				"type": "array",
@@ -316,7 +306,7 @@ func triageSchema() map[string]any {
 		"properties": map[string]any{
 			"status": map[string]any{
 				"type": "string",
-				"enum": []string{string(ai.ResponseStatusComplete)},
+				"enum": []string{string(ResponseStatusComplete)},
 			},
 			"escalate": map[string]any{
 				"type": "boolean",
@@ -338,57 +328,7 @@ func triageSchema() map[string]any {
 	}
 }
 
-func readBounded(reader io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, maxResponseBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxResponseBytes {
-		return nil, fmt.Errorf("response exceeds %d byte limit", maxResponseBytes)
-	}
-	return data, nil
-}
-
-func apiError(status int, body []byte, apiKey string) error {
-	var envelope struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	message := "request failed"
-	if json.Unmarshal(body, &envelope) == nil && strings.TrimSpace(envelope.Error.Message) != "" {
-		message = sanitizeMessage(envelope.Error.Message)
-	}
-	message = strings.ReplaceAll(message, apiKey, "[REDACTED_SECRET]")
-	return fmt.Errorf("OpenAI API returned HTTP %d: %s", status, message)
-}
-
-func sanitizeMessage(value string) string {
-	value = strings.Map(func(character rune) rune {
-		if unicode.IsControl(character) {
-			return ' '
-		}
-		return character
-	}, value)
-	value = strings.TrimSpace(value)
-	if len(value) > 500 {
-		value = value[:500] + "..."
-	}
-	return value
-}
-
-func ensureJSONEnd(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("OpenAI structured review contains trailing JSON")
-		}
-		return fmt.Errorf("decode trailing OpenAI structured review: %w", err)
-	}
-	return nil
-}
-
-func validateEndpoint(value string) error {
+func validateOpenAIEndpoint(value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return fmt.Errorf("parse OpenAI endpoint: %w", err)

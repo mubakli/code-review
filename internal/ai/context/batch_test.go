@@ -1,7 +1,7 @@
-package ai
+package context
 
 import (
-	"context"
+	stdcontext "context"
 	"strings"
 	"testing"
 
@@ -10,13 +10,15 @@ import (
 	"code-review/internal/redact"
 )
 
-func TestBuilderCreatesLanguageIndependentRedactedBatches(t *testing.T) {
+const testPrompt = "Review the staged diff for defects only."
+
+func TestPreparerCreatesLanguageIndependentRedactedBatches(t *testing.T) {
 	t.Parallel()
 
 	budget := Budget{MaxInputTokens: 700, MaxDiffTokens: 180, MaxStaticFindingTokens: 200}
-	builder, err := New(budget)
+	preparer, err := NewPreparer(budget)
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewPreparer() error = %v", err)
 	}
 	secret := "actual-provider-secret-value"
 	changes := change.ChangeSet{Files: []change.FileChange{
@@ -26,44 +28,45 @@ func TestBuilderCreatesLanguageIndependentRedactedBatches(t *testing.T) {
 		{NewPath: "assets/logo.png", Status: change.StatusAdded, Binary: true},
 	}}
 	localFinding := validFinding("web/app.ts", "Potential credential", "A local rule found a credential.")
-
-	batches, err := builder.Build(context.Background(), changes, []findings.Finding{localFinding}, nil)
+	diffLimit, err := budget.DiffLimit(EstimateTokens(testPrompt))
 	if err != nil {
-		t.Fatalf("Build() error = %v", err)
+		t.Fatalf("DiffLimit() error = %v", err)
 	}
-	if len(batches) == 0 {
-		t.Fatal("Build() returned no batches")
+
+	prepared, err := preparer.Prepare(stdcontext.Background(), changes, []findings.Finding{localFinding}, nil, testPrompt)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if len(prepared.Batches) == 0 {
+		t.Fatal("Prepare() returned no batches")
 	}
 
 	seenFiles := make(map[string]bool)
 	seenFinding := false
 	seenRedaction := false
-	for _, batch := range batches {
+	for _, batch := range prepared.Batches {
 		if batch.EstimatedTokens > budget.MaxInputTokens {
 			t.Errorf("EstimatedTokens = %d, limit %d", batch.EstimatedTokens, budget.MaxInputTokens)
 		}
-		if batch.DiffTokens > builder.diffTokenLimit {
-			t.Errorf("DiffTokens = %d, limit %d", batch.DiffTokens, builder.diffTokenLimit)
+		if batch.DiffTokens > diffLimit {
+			t.Errorf("DiffTokens = %d, limit %d", batch.DiffTokens, diffLimit)
 		}
-		if batch.Request.Instructions() != ReviewInstructions {
-			t.Error("batch uses unexpected review instructions")
+		if strings.Contains(batch.Diff, secret) || strings.Contains(batch.Diff, "go-secret-value") || strings.Contains(batch.Diff, "python-secret-value") {
+			t.Fatalf("batch contains a raw secret:\n%s", batch.Diff)
 		}
-		if strings.Contains(batch.Request.Diff(), secret) || strings.Contains(batch.Request.Diff(), "go-secret-value") || strings.Contains(batch.Request.Diff(), "python-secret-value") {
-			t.Fatalf("batch contains a raw secret:\n%s", batch.Request.Diff())
-		}
-		if strings.Contains(batch.Request.Diff(), redact.Placeholder) {
+		if strings.Contains(batch.Diff, redact.Placeholder) {
 			seenRedaction = true
 		}
-		if strings.Contains(batch.Request.Diff(), "logo.png") {
-			t.Fatalf("batch contains a binary file:\n%s", batch.Request.Diff())
+		if strings.Contains(batch.Diff, "logo.png") {
+			t.Fatalf("batch contains a binary file:\n%s", batch.Diff)
 		}
 		for _, file := range batch.Files {
 			seenFiles[file] = true
 		}
-		if len(batch.Request.StaticFindings()) > 0 {
+		if len(batch.StaticFindings) > 0 {
 			seenFinding = true
-			if batch.Request.StaticFindings()[0].File != "web/app.ts" {
-				t.Fatalf("batch contains unrelated finding: %#v", batch.Request.StaticFindings())
+			if batch.StaticFindings[0].File != "web/app.ts" {
+				t.Fatalf("batch contains unrelated finding: %#v", batch.StaticFindings)
 			}
 		}
 	}
@@ -80,29 +83,33 @@ func TestBuilderCreatesLanguageIndependentRedactedBatches(t *testing.T) {
 	}
 }
 
-func TestBuilderSplitsLargeDiffByFileAndHunk(t *testing.T) {
+func TestPreparerSplitsLargeDiffByFileAndHunk(t *testing.T) {
 	t.Parallel()
 
 	budget := Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
-	builder, err := New(budget)
+	preparer, err := NewPreparer(budget)
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewPreparer() error = %v", err)
 	}
 	lines := make([]string, 0, 30)
 	for index := 0; index < 30; index++ {
 		lines = append(lines, "changed line with useful context")
 	}
 	changes := change.ChangeSet{Files: []change.FileChange{changedFile("src/service.ts", lines)}}
-
-	batches, err := builder.Build(context.Background(), changes, nil, nil)
+	diffLimit, err := budget.DiffLimit(EstimateTokens(testPrompt))
 	if err != nil {
-		t.Fatalf("Build() error = %v", err)
+		t.Fatalf("DiffLimit() error = %v", err)
 	}
-	if len(batches) < 2 {
-		t.Fatalf("len(batches) = %d, want multiple batches", len(batches))
+
+	prepared, err := preparer.Prepare(stdcontext.Background(), changes, nil, nil, testPrompt)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
 	}
-	for _, batch := range batches {
-		if batch.DiffTokens > builder.diffTokenLimit || batch.EstimatedTokens > budget.MaxInputTokens {
+	if len(prepared.Batches) < 2 {
+		t.Fatalf("len(batches) = %d, want multiple batches", len(prepared.Batches))
+	}
+	for _, batch := range prepared.Batches {
+		if batch.DiffTokens > diffLimit || batch.EstimatedTokens > budget.MaxInputTokens {
 			t.Errorf("batch exceeds budget: %#v", batch)
 		}
 		if len(batch.Files) != 1 || batch.Files[0] != "src/service.ts" {
@@ -111,72 +118,76 @@ func TestBuilderSplitsLargeDiffByFileAndHunk(t *testing.T) {
 	}
 }
 
-func TestBuilderMarksLongLineTruncation(t *testing.T) {
+func TestPreparerMarksLongLineTruncation(t *testing.T) {
 	t.Parallel()
 
 	budget := Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
-	builder, err := New(budget)
+	preparer, err := NewPreparer(budget)
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewPreparer() error = %v", err)
 	}
 	longLine := strings.Repeat("x", 2000)
 	changes := change.ChangeSet{Files: []change.FileChange{changedFile("dist-like-but-reviewed.js", []string{longLine})}}
-
-	batches, err := builder.Build(context.Background(), changes, nil, nil)
+	diffLimit, err := budget.DiffLimit(EstimateTokens(testPrompt))
 	if err != nil {
-		t.Fatalf("Build() error = %v", err)
+		t.Fatalf("DiffLimit() error = %v", err)
 	}
-	if len(batches) != 1 || !batches[0].Truncated {
-		t.Fatalf("batches = %#v, want one truncated batch", batches)
+
+	prepared, err := preparer.Prepare(stdcontext.Background(), changes, nil, nil, testPrompt)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
 	}
-	if !strings.Contains(batches[0].Request.Diff(), "long diff line truncated") {
-		t.Fatalf("truncation marker is missing:\n%s", batches[0].Request.Diff())
+	if len(prepared.Batches) != 1 || !prepared.Batches[0].Truncated {
+		t.Fatalf("batches = %#v, want one truncated batch", prepared.Batches)
 	}
-	if batches[0].DiffTokens > builder.diffTokenLimit {
-		t.Fatalf("DiffTokens = %d, limit %d", batches[0].DiffTokens, builder.diffTokenLimit)
+	if !strings.Contains(prepared.Batches[0].Diff, "long diff line truncated") {
+		t.Fatalf("truncation marker is missing:\n%s", prepared.Batches[0].Diff)
+	}
+	if prepared.Batches[0].DiffTokens > diffLimit {
+		t.Fatalf("DiffTokens = %d, limit %d", prepared.Batches[0].DiffTokens, diffLimit)
 	}
 }
 
-func TestBuilderBudgetsStaticFindings(t *testing.T) {
+func TestPreparerBudgetsStaticFindings(t *testing.T) {
 	t.Parallel()
 
 	first := validFinding("main.go", "First", "Short message")
 	second := validFinding("main.go", "Second", strings.Repeat("long message ", 30))
 	staticLimit := estimateFindings([]findings.Finding{first})
 	budget := Budget{MaxInputTokens: 700, MaxDiffTokens: 120, MaxStaticFindingTokens: staticLimit}
-	builder, err := New(budget)
+	preparer, err := NewPreparer(budget)
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewPreparer() error = %v", err)
 	}
 	changes := change.ChangeSet{Files: []change.FileChange{changedFile("main.go", []string{"changed"})}}
 
-	batches, err := builder.Build(context.Background(), changes, []findings.Finding{first, second}, nil)
+	prepared, err := preparer.Prepare(stdcontext.Background(), changes, []findings.Finding{first, second}, nil, testPrompt)
 	if err != nil {
-		t.Fatalf("Build() error = %v", err)
+		t.Fatalf("Prepare() error = %v", err)
 	}
-	if len(batches) != 1 {
-		t.Fatalf("len(batches) = %d, want 1", len(batches))
+	if len(prepared.Batches) != 1 {
+		t.Fatalf("len(batches) = %d, want 1", len(prepared.Batches))
 	}
-	if got := len(batches[0].Request.StaticFindings()); got != 1 {
+	if got := len(prepared.Batches[0].StaticFindings); got != 1 {
 		t.Fatalf("len(StaticFindings) = %d, want 1", got)
 	}
-	if batches[0].OmittedFindings != 1 {
-		t.Fatalf("OmittedFindings = %d, want 1", batches[0].OmittedFindings)
+	if prepared.Batches[0].OmittedFindings != 1 {
+		t.Fatalf("OmittedFindings = %d, want 1", prepared.Batches[0].OmittedFindings)
 	}
 }
 
-func TestBuilderHonorsCancellation(t *testing.T) {
+func TestPreparerHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
-	builder, err := New(DefaultBudget())
+	preparer, err := NewPreparer(DefaultBudget())
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewPreparer() error = %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	cancel()
-	_, err = builder.Build(ctx, change.ChangeSet{}, nil, nil)
-	if err != context.Canceled {
-		t.Fatalf("Build() error = %v, want context.Canceled", err)
+	_, err = preparer.Prepare(ctx, change.ChangeSet{}, nil, nil, testPrompt)
+	if err != stdcontext.Canceled {
+		t.Fatalf("Prepare() error = %v, want context.Canceled", err)
 	}
 }
 

@@ -1,19 +1,26 @@
 package ai
 
 import (
-	"context"
+	stdcontext "context"
 	"fmt"
 	"strings"
 
+	"code-review/internal/ai/context"
+	"code-review/internal/ai/provider"
+	"code-review/internal/ai/request"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
 
+// Orchestrator wires the preparation/execution layers with the declarative
+// agent model: policies route, the context layer prepares, the request layer
+// builds, providers execute, and the orchestrator validates and merges.
 type Orchestrator struct {
-	builder  Builder
-	provider Provider
+	preparer context.Preparer
+	builder  request.RequestBuilder
+	provider provider.Provider
 	agents   []AgentSpec
-	resolver ContextResolver
+	resolver context.ContextResolver
 }
 
 type ReviewResult struct {
@@ -32,15 +39,15 @@ type BatchFailure struct {
 	Message string
 }
 
-func NewOrchestrator(builder Builder, provider Provider) (*Orchestrator, error) {
-	return NewOrchestratorWithAgents(builder, provider, DefaultAgents())
+func NewOrchestrator(preparer context.Preparer, builder request.RequestBuilder, provider provider.Provider) (*Orchestrator, error) {
+	return NewOrchestratorWithAgents(preparer, builder, provider, DefaultAgents())
 }
 
-func NewOrchestratorWithAgents(builder Builder, provider Provider, agents []AgentSpec) (*Orchestrator, error) {
-	return NewOrchestratorWithAgentsAndResolver(builder, provider, agents, nil)
+func NewOrchestratorWithAgents(preparer context.Preparer, builder request.RequestBuilder, provider provider.Provider, agents []AgentSpec) (*Orchestrator, error) {
+	return NewOrchestratorWithAgentsAndResolver(preparer, builder, provider, agents, nil)
 }
 
-func NewOrchestratorWithAgentsAndResolver(builder Builder, provider Provider, agents []AgentSpec, resolver ContextResolver) (*Orchestrator, error) {
+func NewOrchestratorWithAgentsAndResolver(preparer context.Preparer, builder request.RequestBuilder, provider provider.Provider, agents []AgentSpec, resolver context.ContextResolver) (*Orchestrator, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("AI provider is required")
 	}
@@ -55,13 +62,13 @@ func NewOrchestratorWithAgentsAndResolver(builder Builder, provider Provider, ag
 			return nil, fmt.Errorf("agent %q has role %q; only analyzer agents can be selected for review", agent.ID, agent.Role)
 		}
 	}
-	return &Orchestrator{builder: builder, provider: provider, agents: append([]AgentSpec(nil), agents...), resolver: resolver}, nil
+	return &Orchestrator{preparer: preparer, builder: builder, provider: provider, agents: append([]AgentSpec(nil), agents...), resolver: resolver}, nil
 }
 
 // Review runs each selected agent only when its routing policy decides to, and
 // executes the agent according to its role. Routing is declarative: agents do
 // not switch on sibling identities, and routers are consulted only by policies.
-func (o *Orchestrator) Review(ctx context.Context, changes change.ChangeSet, localFindings []findings.Finding) (ReviewResult, error) {
+func (o *Orchestrator) Review(ctx stdcontext.Context, changes change.ChangeSet, localFindings []findings.Finding) (ReviewResult, error) {
 	result := ReviewResult{
 		Findings:      findings.Merge(localFindings, nil),
 		ReviewedFiles: make([]string, 0),
@@ -102,32 +109,34 @@ func (o *Orchestrator) Review(ctx context.Context, changes change.ChangeSet, loc
 
 // RunRouter executes a router agent and records its activity. Router errors
 // escalate (fail-closed): policies may treat the return value as their gate.
-func (o *Orchestrator) RunRouter(ctx context.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (bool, error) {
+func (o *Orchestrator) RunRouter(ctx stdcontext.Context, spec AgentSpec, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int) (bool, error) {
 	if spec.Role != RoleRouter {
 		return false, fmt.Errorf("agent %q has role %q and cannot route", spec.ID, spec.Role)
 	}
-	builder, err := o.builder.ForAgent(spec)
+	prepared, err := o.preparer.Prepare(ctx, changes, staticFindings, nil, spec.Prompt)
 	if err != nil {
 		result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, nil, err))
 		return true, nil // fail closed
 	}
-	batches, err := builder.Build(ctx, changes, staticFindings, nil)
-	if err != nil {
-		result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, nil, err))
-		return true, nil
-	}
-	if len(batches) == 0 {
+	if len(prepared.Batches) == 0 {
 		return false, nil
 	}
 	result.Agents = append(result.Agents, string(spec.ID))
-	result.BatchCount += len(batches)
+	result.BatchCount += len(prepared.Batches)
 	escalate := false
-	for _, batch := range batches {
+	for _, batch := range prepared.Batches {
 		if err := ctx.Err(); err != nil {
 			return escalate, nil
 		}
 		result.ReviewedFiles = appendUnique(result.ReviewedFiles, batch.Files...)
-		response, err := o.provider.Triage(ctx, batch.Request)
+		analysisRequest, err := o.builder.Build(batch, spec.Prompt)
+		if err != nil {
+			result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, batch.Files, err))
+			*batchIndex++
+			escalate = true
+			continue
+		}
+		response, err := o.provider.Triage(ctx, analysisRequest)
 		if err != nil {
 			result.Failures = append(result.Failures, newBatchFailure(spec.ID, *batchIndex, batch.Files, err))
 			*batchIndex++
@@ -151,30 +160,30 @@ func (o *Orchestrator) RunRouter(ctx context.Context, spec AgentSpec, changes ch
 
 // ResolveStagedContext supplies related staged file content for deep
 // specialist review. It is advisory: failures yield no context, never errors.
-func (o *Orchestrator) ResolveStagedContext(ctx context.Context, changes change.ChangeSet) ([]ContextFile, error) {
+func (o *Orchestrator) ResolveStagedContext(ctx stdcontext.Context, changes change.ChangeSet) ([]context.ContextFile, error) {
 	if o.resolver == nil {
 		return nil, nil
 	}
 	return o.resolver.ResolveStagedContext(ctx, contextPaths(changes))
 }
 
-func (o *Orchestrator) runAnalyzer(ctx context.Context, changes change.ChangeSet, localFindings []findings.Finding, eligibleLines map[string]map[int]struct{}, agent AgentSpec, relatedContext []ContextFile, result *ReviewResult, batchIndex int) ([]findings.Finding, int, error) {
-	agentBuilder, err := o.builder.ForAgent(agent)
+func (o *Orchestrator) runAnalyzer(ctx stdcontext.Context, changes change.ChangeSet, localFindings []findings.Finding, eligibleLines map[string]map[int]struct{}, agent AgentSpec, relatedContext []context.ContextFile, result *ReviewResult, batchIndex int) ([]findings.Finding, int, error) {
+	prepared, err := o.preparer.Prepare(ctx, changes, localFindings, relatedContext, agent.Prompt)
 	if err != nil {
-		return nil, batchIndex, fmt.Errorf("configure %s agent: %w", agent.ID, err)
+		return nil, batchIndex, fmt.Errorf("prepare %s agent context: %w", agent.ID, err)
 	}
-	batches, err := agentBuilder.Build(ctx, changes, localFindings, relatedContext)
-	if err != nil {
-		return nil, batchIndex, fmt.Errorf("prepare %s agent batches: %w", agent.ID, err)
-	}
-	result.BatchCount += len(batches)
+	result.BatchCount += len(prepared.Batches)
 	aiFindings := make([]findings.Finding, 0)
-	for _, batch := range batches {
+	for _, batch := range prepared.Batches {
 		if err := ctx.Err(); err != nil {
 			return aiFindings, batchIndex, err
 		}
 		result.ReviewedFiles = appendUnique(result.ReviewedFiles, batch.Files...)
-		response, err := o.provider.Analyze(ctx, batch.Request)
+		analysisRequest, err := o.builder.Build(batch, agent.Prompt)
+		if err != nil {
+			return nil, batchIndex, fmt.Errorf("build %s agent request: %w", agent.ID, err)
+		}
+		response, err := o.provider.Analyze(ctx, analysisRequest)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return aiFindings, batchIndex, ctxErr
 		}
@@ -210,11 +219,11 @@ func contextPaths(changes change.ChangeSet) []string {
 	return paths
 }
 
-func validateTriageResponse(response *TriageResponse) error {
+func validateTriageResponse(response *provider.TriageResponse) error {
 	if response == nil {
 		return fmt.Errorf("provider returned an empty triage response")
 	}
-	if response.Status != ResponseStatusComplete {
+	if response.Status != provider.ResponseStatusComplete {
 		return fmt.Errorf("unsupported triage response status %q", response.Status)
 	}
 	if len(response.Surfaces) > 20 {
@@ -254,3 +263,5 @@ func newBatchFailure(agentID AgentID, index int, files []string, err error) Batc
 		Message: err.Error(),
 	}
 }
+
+var _ PolicyScope = (*Orchestrator)(nil)

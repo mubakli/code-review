@@ -28,10 +28,17 @@ that routine adapter splits do not make this document stale:
   staged changes without exposing Git details to review logic.
 - `internal/review`, `internal/analyzers/secrets`, and `internal/findings` own
   deterministic review, finding validation, and merge rules.
-- `internal/ai` owns specialist agents, safe request construction, token
-  budgeting, batching, and provider-neutral orchestration.
-- `internal/ai/providers` contains the mock test adapter, the OpenAI Responses
-  API adapter, and the DeepSeek Chat Completions adapter.
+- `internal/ai` owns the declarative agent model (AgentSpec, roles, routing
+  policies) and provider-neutral orchestration of prepare, build, execute,
+  validate, and merge.
+- `internal/ai/context` extracts, redacts, token-budgets, and batches a change
+  set into prepared context. It performs no provider calls.
+- `internal/ai/request` turns one prepared batch into a provider-neutral
+  AnalysisRequest (final redaction pass, prompt attachment). It never talks to
+  a network.
+- `internal/ai/provider` contains the provider-neutral request/response types,
+  the mock test adapter, the OpenAI Responses API adapter, and the DeepSeek
+  Chat Completions adapter. Providers cannot observe unredacted content.
 - `internal/config`, `internal/redact`, and `internal/output` own safe AI
   settings, provider-egress redaction, and CLI presentation.
 - `vscode/src` is the TypeScript process/UI adapter for provider configuration,
@@ -48,8 +55,9 @@ cmd/reviewer
   -> git
   -> review
   -> ai
-  -> ai/providers/openai
-  -> ai/providers/deepseek
+  -> ai/context
+  -> ai/request
+  -> ai/provider
   -> analyzers/secrets
   -> config
   -> pathfilter
@@ -71,9 +79,19 @@ ai
   -> change
   -> findings
   -> redact
+  -> ai/context
+  -> ai/request
+  -> ai/provider
 
-ai/providers/openai, ai/providers/deepseek
-  -> ai
+ai/request
+  -> ai/context
+  -> findings
+  -> redact
+
+ai/provider
+  -> ai/request
+  -> findings
+  -> redact
 
 output
   -> review
@@ -106,8 +124,8 @@ egress policy intentionally differs from conservative secret findings.
 ### Open/Closed
 
 `review.Analyzer` allows new deterministic analyzers without changing the
-review service. `ai.Provider` allows provider implementations without changing
-safe request construction or batching.
+review service. `provider.Provider` allows provider implementations without
+changing safe request preparation or batching.
 
 Future parser and cache interfaces will be defined by their consuming use case
 only after the first concrete implementation exists.
@@ -130,8 +148,9 @@ or service-locator interfaces.
 and does not know how Git, editor buffers, commit ranges, or future sources
 produce them.
 
-Provider implementations will depend on the `ai.Provider` contract. The AI
-package will never import concrete OpenAI, Anthropic, Gemini, or Ollama clients.
+Provider implementations depend on the provider-neutral request types and the
+`provider.Provider` contract. `internal/ai` will never import concrete OpenAI,
+Anthropic, Gemini, or Ollama clients.
 
 ## Composition Root
 
@@ -160,7 +179,7 @@ Add these packages only when their features are implemented:
 ```text
 internal/
   ai/
-    providers/
+    provider/
       anthropic/
       gemini/
       ollama/
@@ -182,15 +201,17 @@ internal/
 `contextengine` is used instead of `context` to avoid collisions with Go's
 standard `context` package.
 
-Provider packages may import `internal/ai`; `internal/ai` must not import a
-provider implementation. Parser packages may implement contracts consumed by
-the context engine; the context engine must not hardcode every language.
+Provider implementations import `internal/ai/request` and `internal/ai/context`
+types; `internal/ai` must not import a provider implementation. Parser packages
+may implement contracts consumed by the context engine; the context engine must
+not hardcode every language.
 
 Provider selection is registry-driven at the VS Code boundary and concrete at
 the Go composition root. OpenAI uses its Responses API adapter; DeepSeek uses a
-separate Chat Completions adapter. Both implement `ai.Provider`, receive only
-redacted `AnalysisRequest` values, enforce bounded HTTPS responses, and keep
-provider-specific API keys out of persisted settings and Git subprocesses.
+separate Chat Completions adapter. Both implement the provider-neutral
+`provider.Provider` interface, receive only redacted `AnalysisRequest` values,
+enforce bounded HTTPS responses, and keep provider-specific API keys out of
+persisted settings and Git subprocesses.
 
 The VS Code TypeScript layer remains a process and UI adapter. It starts the Go
 binary, stores API keys in `SecretStorage`, maps JSON findings to diagnostics,
@@ -212,15 +233,16 @@ sensitive configuration.
 
 The composition root applies a second, stricter AI egress policy before calling
 `ai.Orchestrator`. Environment files are removed from that provider-visible
-change set. `ai.Builder` accepts the egress-safe set and retains defensive
-pathless and binary checks. This asymmetry is intentional: sensitive files
+change set. The orchestrator's context preparer accepts the egress-safe set and
+retains defensive pathless and binary checks. This asymmetry is intentional:
+sensitive files
 receive local analysis without leaving the machine.
 
 ## Privacy Boundary
 
-Provider-visible requests have private fields and are created by the AI
-builder. Redaction happens before final token measurement, then again when the
-safe request is created as defense in depth.
+Provider-visible requests have private fields and are created by the request
+builder from a prepared batch. Redaction happens before final token
+measurement, then again when the safe request is created as defense in depth.
 
 Provider implementations receive only:
 
@@ -251,9 +273,10 @@ package.
 
 ## AI Orchestration
 
-`ai.Orchestrator` executes token-budgeted batches through an injected
-`ai.Provider`. Provider responses use an AI-specific DTO without a source
-field. The orchestrator assigns `SourceAI` only after validating:
+`ai.Orchestrator` prepares token-budgeted batches through `ai/context`,
+builds provider-neutral requests through `ai/request`, and executes them through
+an injected provider implementing `provider.Provider`. The orchestrator assigns
+`SourceAI` only after validating:
 
 - Response status.
 - Finding shape, enums, confidence, and line ranges.

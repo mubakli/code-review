@@ -1,29 +1,21 @@
-package deepseek
+package provider
 
 import (
 	"bytes"
-	"context"
+	stdcontext "context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
-	"code-review/internal/ai"
-	"code-review/internal/findings"
+	"code-review/internal/ai/request"
 )
 
-const (
-	defaultEndpoint        = "https://api.deepseek.com/chat/completions"
-	defaultMaxOutputTokens = 4096
-	triageMaxOutputTokens  = 512
-	maxResponseBytes       = 4 << 20
-)
+const deepSeekEndpoint = "https://api.deepseek.com/chat/completions"
 
-type Options struct {
+type DeepSeekOptions struct {
 	APIKey          string
 	Model           string
 	Endpoint        string
@@ -32,7 +24,10 @@ type Options struct {
 	AllowHTTP       bool
 }
 
-type Provider struct {
+// DeepSeek executes analysis and triage requests against the DeepSeek Chat
+// Completions API and normalizes the raw output into the common structured
+// responses.
+type DeepSeek struct {
 	apiKey          string
 	model           string
 	endpoint        string
@@ -40,9 +35,9 @@ type Provider struct {
 	client          *http.Client
 }
 
-var _ ai.Provider = (*Provider)(nil)
+var _ Provider = (*DeepSeek)(nil)
 
-func New(options Options) (*Provider, error) {
+func NewDeepSeek(options DeepSeekOptions) (*DeepSeek, error) {
 	apiKey := strings.TrimSpace(options.APIKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("DeepSeek API key is required")
@@ -53,7 +48,7 @@ func New(options Options) (*Provider, error) {
 	}
 	endpoint := strings.TrimSpace(options.Endpoint)
 	if endpoint == "" {
-		endpoint = defaultEndpoint
+		endpoint = deepSeekEndpoint
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "https" && !(options.AllowHTTP && parsed.Scheme == "http")) || parsed.Host == "" || parsed.User != nil {
@@ -70,7 +65,7 @@ func New(options Options) (*Provider, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
-	return &Provider{
+	return &DeepSeek{
 		apiKey:          apiKey,
 		model:           model,
 		endpoint:        endpoint,
@@ -79,15 +74,11 @@ func New(options Options) (*Provider, error) {
 	}, nil
 }
 
-func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai.AnalysisResponse, error) {
+func (p *DeepSeek) Analyze(ctx stdcontext.Context, request request.AnalysisRequest) (*AnalysisResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	input, err := json.Marshal(struct {
-		Diff           string             `json:"diff"`
-		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
-		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
-	}{
+	input, err := json.Marshal(requestInput{
 		Diff:           request.Diff(),
 		StaticFindings: request.StaticFindings(),
 		RelatedContext: request.ContextFiles(),
@@ -114,26 +105,21 @@ func (p *Provider) Analyze(ctx context.Context, request ai.AnalysisRequest) (*ai
 	}
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
-	var analysis ai.AnalysisResponse
+	var analysis AnalysisResponse
 	if err := decoder.Decode(&analysis); err != nil {
 		return nil, fmt.Errorf("decode DeepSeek structured review: %w", err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("DeepSeek structured review contains trailing JSON")
+	if err := ensureJSONEnd(decoder, "DeepSeek"); err != nil {
+		return nil, err
 	}
 	return &analysis, nil
 }
 
-func (p *Provider) Triage(ctx context.Context, request ai.AnalysisRequest) (*ai.TriageResponse, error) {
+func (p *DeepSeek) Triage(ctx stdcontext.Context, request request.AnalysisRequest) (*TriageResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	input, err := json.Marshal(struct {
-		Diff           string             `json:"diff"`
-		StaticFindings []findings.Finding `json:"staticFindings,omitempty"`
-		RelatedContext []ai.ContextFile   `json:"relatedContext,omitempty"`
-	}{
+	input, err := json.Marshal(requestInput{
 		Diff:           request.Diff(),
 		StaticFindings: request.StaticFindings(),
 		RelatedContext: request.ContextFiles(),
@@ -160,18 +146,17 @@ func (p *Provider) Triage(ctx context.Context, request ai.AnalysisRequest) (*ai.
 	}
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
-	var triage ai.TriageResponse
+	var triage TriageResponse
 	if err := decoder.Decode(&triage); err != nil {
 		return nil, fmt.Errorf("decode DeepSeek structured triage: %w", err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("DeepSeek structured triage contains trailing JSON")
+	if err := ensureJSONEnd(decoder, "DeepSeek"); err != nil {
+		return nil, err
 	}
 	return &triage, nil
 }
 
-func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
+func (p *DeepSeek) post(ctx stdcontext.Context, payload []byte) (string, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("create DeepSeek request: %w", err)
@@ -193,7 +178,7 @@ func (p *Provider) post(ctx context.Context, payload []byte) (string, error) {
 		return "", fmt.Errorf("read DeepSeek response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", apiError(response.StatusCode, body, p.apiKey)
+		return "", apiError("DeepSeek", response.StatusCode, body, p.apiKey)
 	}
 	var envelope chatResponse
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -230,43 +215,4 @@ type chatResponse struct {
 	Choices []struct {
 		Message message `json:"message"`
 	} `json:"choices"`
-}
-
-func readBounded(reader io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, maxResponseBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxResponseBytes {
-		return nil, fmt.Errorf("response exceeds %d byte limit", maxResponseBytes)
-	}
-	return data, nil
-}
-
-func apiError(status int, body []byte, apiKey string) error {
-	var envelope struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	message := "request failed"
-	if json.Unmarshal(body, &envelope) == nil && strings.TrimSpace(envelope.Error.Message) != "" {
-		message = sanitizeMessage(envelope.Error.Message)
-	}
-	message = strings.ReplaceAll(message, apiKey, "[REDACTED_SECRET]")
-	return fmt.Errorf("DeepSeek API returned HTTP %d: %s", status, message)
-}
-
-func sanitizeMessage(value string) string {
-	value = strings.Map(func(character rune) rune {
-		if unicode.IsControl(character) {
-			return ' '
-		}
-		return character
-	}, value)
-	value = strings.TrimSpace(value)
-	if len(value) > 500 {
-		value = value[:500] + "..."
-	}
-	return value
 }

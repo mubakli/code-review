@@ -1,18 +1,15 @@
-package deepseek
+package provider
 
 import (
-	"context"
+	stdcontext "context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"code-review/internal/ai"
-	"code-review/internal/change"
 )
 
-func TestProviderUsesStructuredChatCompletionWithoutLeakingSecret(t *testing.T) {
+func TestDeepSeekUsesStructuredChatCompletionWithoutLeakingSecret(t *testing.T) {
 	t.Parallel()
 
 	apiKey := "deepseek-test-key"
@@ -53,7 +50,7 @@ func TestProviderUsesStructuredChatCompletionWithoutLeakingSecret(t *testing.T) 
 	}))
 	defer server.Close()
 
-	provider, err := New(Options{
+	instance, err := NewDeepSeek(DeepSeekOptions{
 		APIKey:     apiKey,
 		Model:      "deepseek-chat",
 		Endpoint:   server.URL + "/chat/completions",
@@ -61,22 +58,22 @@ func TestProviderUsesStructuredChatCompletionWithoutLeakingSecret(t *testing.T) 
 		AllowHTTP:  true,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewDeepSeek() error = %v", err)
 	}
-	response, err := provider.Analyze(context.Background(), preparedRequest(t, secret))
+	response, err := instance.Analyze(stdcontext.Background(), preparedRequest(t, secret))
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
-	if response.Status != ai.ResponseStatusComplete || len(response.Findings) != 0 {
+	if response.Status != ResponseStatusComplete || len(response.Findings) != 0 {
 		t.Fatalf("response = %#v", response)
 	}
 }
 
-func TestProviderRejectsUnsafeOptionsAndRedactsAPIError(t *testing.T) {
+func TestDeepSeekRejectsUnsafeOptionsAndRedactsAPIError(t *testing.T) {
 	t.Parallel()
 
-	if _, err := New(Options{APIKey: "key", Model: "model", Endpoint: "http://example.com"}); err == nil {
-		t.Fatal("New() accepted HTTP endpoint")
+	if _, err := NewDeepSeek(DeepSeekOptions{APIKey: "key", Model: "model", Endpoint: "http://example.com"}); err == nil {
+		t.Fatal("NewDeepSeek() accepted HTTP endpoint")
 	}
 	apiKey := "must-not-leak"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -84,42 +81,22 @@ func TestProviderRejectsUnsafeOptionsAndRedactsAPIError(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"error": map[string]any{"message": "failed for " + apiKey}})
 	}))
 	defer server.Close()
-	provider, err := New(Options{APIKey: apiKey, Model: "deepseek-chat", Endpoint: server.URL, HTTPClient: server.Client(), AllowHTTP: true})
+	instance, err := NewDeepSeek(DeepSeekOptions{APIKey: apiKey, Model: "deepseek-chat", Endpoint: server.URL, HTTPClient: server.Client(), AllowHTTP: true})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewDeepSeek() error = %v", err)
 	}
-	_, err = provider.Analyze(context.Background(), preparedRequest(t, "secret"))
+	_, err = instance.Analyze(stdcontext.Background(), preparedRequest(t, "secret"))
 	if err == nil || strings.Contains(err.Error(), apiKey) {
 		t.Fatalf("Analyze() error = %v", err)
 	}
 }
 
-func preparedRequest(t *testing.T, secret string) ai.AnalysisRequest {
-	t.Helper()
-	builder, err := ai.New(ai.DefaultBudget())
-	if err != nil {
-		t.Fatalf("ai.New() error = %v", err)
-	}
-	changes := change.ChangeSet{Files: []change.FileChange{{
-		NewPath: "service.go",
-		Status:  change.StatusAdded,
-		Hunks: []change.Hunk{{Lines: []change.Line{
-			{Kind: change.LineAdded, NewLine: 1, Content: `password = "` + secret + `"`},
-		}}},
-	}}}
-	batches, err := builder.Build(context.Background(), changes, nil, nil)
-	if err != nil || len(batches) != 1 {
-		t.Fatalf("Build() = %#v, %v", batches, err)
-	}
-	return batches[0].Request
-}
-
-func TestProviderTriageProducesStructuredDecision(t *testing.T) {
+func TestDeepSeekTriageProducesStructuredDecision(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		structured, err := json.Marshal(ai.TriageResponse{
-			Status:    ai.ResponseStatusComplete,
+		structured, err := json.Marshal(TriageResponse{
+			Status:    ResponseStatusComplete,
 			Escalate:  true,
 			Surfaces:  []string{"input handling"},
 			Rationale: "User input reaches a command.",
@@ -136,11 +113,11 @@ func TestProviderTriageProducesStructuredDecision(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := New(Options{APIKey: "test-key", Model: "deepseek-chat", Endpoint: server.URL, HTTPClient: server.Client(), AllowHTTP: true})
+	instance, err := NewDeepSeek(DeepSeekOptions{APIKey: "test-key", Model: "deepseek-chat", Endpoint: server.URL, HTTPClient: server.Client(), AllowHTTP: true})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("NewDeepSeek() error = %v", err)
 	}
-	response, err := provider.Triage(context.Background(), preparedRequest(t, "test-secret"))
+	response, err := instance.Triage(stdcontext.Background(), preparedRequest(t, "test-secret"))
 	if err != nil {
 		t.Fatalf("Triage() error = %v", err)
 	}
