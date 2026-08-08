@@ -150,6 +150,51 @@ func symbolsFromLine(content string) []string {
 	return symbols
 }
 
+// SymbolsInText extracts the candidate symbols present in arbitrary source
+// text, using the same distinctive-token rules as DiffSymbols. Context
+// resolvers use it to attribute a related file back to the changed files whose
+// symbols it actually references.
+func SymbolsInText(content string) []string {
+	return symbolsFromLine(content)
+}
+
+// DiffSymbolsByFile maps each changed file to the distinctive symbols in its
+// added lines, so a context resolver can build the inverse symbol-to-owner
+// index it needs to attribute related context files to the changed files that
+// reference them.
+func DiffSymbolsByFile(changes change.ChangeSet) map[string][]string {
+	result := make(map[string][]string)
+	for _, file := range changes.Files {
+		path := file.Path()
+		if path == "" || file.Binary {
+			continue
+		}
+		counts := make(map[string]int)
+		for _, hunk := range file.Hunks {
+			for _, line := range hunk.Lines {
+				if line.Kind != change.LineAdded {
+					continue
+				}
+				for _, token := range symbolsFromLine(line.Content) {
+					counts[token]++
+				}
+			}
+		}
+		symbols := make([]string, 0, len(counts))
+		for token := range counts {
+			symbols = append(symbols, token)
+		}
+		sort.Strings(symbols)
+		if len(symbols) > maxDiffSymbols {
+			symbols = symbols[:maxDiffSymbols]
+		}
+		if len(symbols) > 0 {
+			result[path] = symbols
+		}
+	}
+	return result
+}
+
 // stripStringLiterals removes quoted strings so identifiers inside imports
 // and messages never leak into the symbol set as themselves.
 func stripStringLiterals(content string) string {

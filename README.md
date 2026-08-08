@@ -67,11 +67,13 @@ escalated surfaces and reasons are appended to its prompt, and related staged
 context is resolved on demand — symbols extracted from the added lines are
 searched in the Git index, changed files are never re-sent, and only the 1-3
 surrounding files the symbols point at are fetched, egress-checked, redacted,
-and budgeted. The deep agent runs when a signal, the triage, or any triage
-error triggers it. Escalation is fail-closed. Each path
-receives the same redacted, budgeted diff pipeline; Go assigns the trusted
-`agentId`, filters out-of-scope categories, and merges likely duplicates before
-returning findings.
+and budgeted. Each related file is attributed back to the changed files whose
+symbols it references, so it is attached only to the batches covering those
+files and never duplicated into unrelated batches. The deep agent runs when a
+signal, the triage, or any triage error triggers it. Escalation is fail-closed.
+Each path receives the same redacted, budgeted diff pipeline; Go assigns the
+trusted `agentId`, filters out-of-scope categories, and merges likely
+duplicates before returning findings.
 
 Agents run concurrently instead of end to end: independent agents execute in
 parallel and each agent's batches are also parallel, all bounded by the

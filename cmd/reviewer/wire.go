@@ -178,7 +178,9 @@ const (
 // searches the index for the diff's symbols (identifiers, imports, callees),
 // excludes the changed files themselves and anything the egress policy denies,
 // prefers the surrounding layer the intent names, and returns at most three
-// related files. The model never receives filesystem access: it can only ask
+// related files. Each related file is attributed back to the changed files
+// whose symbols it references, so batch selection attaches it only where it is
+// relevant. The model never receives filesystem access: it can only ask
 // for symbols, and the resolver answers with redacted, budgeted content.
 func (r stagedContextResolver) Resolve(ctx stdcontext.Context, changes change.ChangeSet, request aicontext.ContextRequest) (aicontext.RepositoryContext, error) {
 	resolved := make([]aicontext.ContextFile, 0, maxRelatedContextFiles)
@@ -208,9 +210,12 @@ func (r stagedContextResolver) Resolve(ctx stdcontext.Context, changes change.Ch
 	if len(symbols) == 0 {
 		return aicontext.RepositoryContext{Files: resolved}, nil
 	}
-	related, err := r.symbolFiles(ctx, changes, request.Intent, symbols, seen)
+	related, err := r.symbolFiles(ctx, request.Intent, symbols, seen, symbolOwners(aicontext.DiffSymbolsByFile(changes)), maxRelatedContextFiles-len(resolved))
 	if err != nil {
 		return aicontext.RepositoryContext{Files: resolved}, nil // context is advisory
+	}
+	if room := maxRelatedContextFiles - len(resolved); len(related) > room {
+		related = related[:room]
 	}
 	return aicontext.RepositoryContext{Files: append(resolved, related...)}, nil
 }
@@ -229,9 +234,15 @@ func (r stagedContextResolver) stagedFile(ctx stdcontext.Context, path string) (
 // symbolFiles finds the files whose index content references the diff's
 // symbols, ranked by how many references they hold. Files matching the intent
 // layer come first, then the most referenced files; changed files and
-// egress-denied files are excluded. A deterministic path tiebreak keeps the
+// egress-denied files are excluded. Budget bounds how many related files may
+// still be returned, so the resolved count never exceeds maxRelatedContextFiles.
+// Each returned file is attributed to the changed files whose diff symbols
+// appear in its content (RelatedTo). A deterministic path tiebreak keeps the
 // selection stable.
-func (r stagedContextResolver) symbolFiles(ctx stdcontext.Context, changes change.ChangeSet, intent aicontext.ContextIntent, symbols []string, seen map[string]struct{}) ([]aicontext.ContextFile, error) {
+func (r stagedContextResolver) symbolFiles(ctx stdcontext.Context, intent aicontext.ContextIntent, symbols []string, seen map[string]struct{}, owners map[string][]string, budget int) ([]aicontext.ContextFile, error) {
+	if budget <= 0 {
+		return nil, nil
+	}
 	matches, err := r.repository.GrepIndex(ctx, symbols)
 	if err != nil {
 		return nil, err
@@ -262,9 +273,8 @@ func (r stagedContextResolver) symbolFiles(ctx stdcontext.Context, changes chang
 		}
 		return left.path < right.path
 	})
-	remaining := maxRelatedContextFiles - len(seen)
-	if remaining > 0 && len(candidates) > remaining {
-		candidates = candidates[:remaining]
+	if len(candidates) > budget {
+		candidates = candidates[:budget]
 	}
 	files := make([]aicontext.ContextFile, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -272,10 +282,47 @@ func (r stagedContextResolver) symbolFiles(ctx stdcontext.Context, changes chang
 			return nil, err
 		}
 		if file, ok := r.stagedFile(ctx, candidate.path); ok {
-			files = append(files, file)
+			files = append(files, aicontext.ContextFile{
+				Path:      file.Path,
+				Content:   file.Content,
+				RelatedTo: relatedChangedFiles(file.Content, owners),
+			})
 		}
 	}
 	return files, nil
+}
+
+// symbolOwners inverts DiffSymbolsByFile (changed file → its symbols) into the
+// symbol → changed files index that relatedChangedFiles needs to attribute a
+// related file back to the changed files referencing it.
+func symbolOwners(byFile map[string][]string) map[string][]string {
+	inverted := make(map[string][]string)
+	for path, symbols := range byFile {
+		for _, symbol := range symbols {
+			inverted[symbol] = append(inverted[symbol], path)
+		}
+	}
+	return inverted
+}
+
+// relatedChangedFiles attributes a related file back to the changed files
+// whose diff symbols appear in its content, so batch selection attaches the
+// context only where it is relevant. An empty result leaves the file attached
+// to every batch.
+func relatedChangedFiles(content string, owners map[string][]string) []string {
+	seen := make(map[string]struct{})
+	related := make([]string, 0)
+	for _, symbol := range aicontext.SymbolsInText(content) {
+		for _, owner := range owners[symbol] {
+			if _, duplicate := seen[owner]; duplicate {
+				continue
+			}
+			seen[owner] = struct{}{}
+			related = append(related, owner)
+		}
+	}
+	sort.Strings(related)
+	return related
 }
 
 func matchesIntent(path string, markers []string, symbols []string) bool {

@@ -17,10 +17,14 @@ const (
 
 // ContextFile is a related staged source file resolved locally for deep
 // specialist review. Content is always redacted before a provider can observe
-// it.
+// it. RelatedTo names the changed files whose diff symbols this context file
+// references; when non-empty the file is attached only to batches covering one
+// of those changed files, so a multi-batch diff never duplicates the same
+// surrounding code into every batch. An empty RelatedTo attaches to every batch.
 type ContextFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path      string   `json:"path"`
+	Content   string   `json:"content"`
+	RelatedTo []string `json:"relatedTo,omitempty"`
 }
 
 // ContextIntent names the kind of surrounding code a deep specialist may need

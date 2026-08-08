@@ -1,6 +1,7 @@
 package context
 
 import (
+	"reflect"
 	stdcontext "context"
 	"strings"
 	"testing"
@@ -173,6 +174,97 @@ func TestPreparerBudgetsStaticFindings(t *testing.T) {
 	}
 	if prepared.Batches[0].OmittedFindings != 1 {
 		t.Fatalf("OmittedFindings = %d, want 1", prepared.Batches[0].OmittedFindings)
+	}
+}
+
+func TestSelectContextUsesRelatedTo(t *testing.T) {
+	t.Parallel()
+
+	fileSet := map[string]struct{}{"controllers/user.go": {}}
+	contextFiles := []ContextFile{
+		{Path: "middleware/auth.go", Content: "auth code", RelatedTo: []string{"controllers/user.go"}},
+		{Path: "services/payment.go", Content: "payment code", RelatedTo: []string{"controllers/payment.go"}},
+		{Path: "shared/types.go", Content: "shared code"},
+	}
+	selected := selectContext(fileSet, contextFiles)
+	paths := make([]string, 0, len(selected))
+	for _, file := range selected {
+		paths = append(paths, file.Path)
+	}
+	want := []string{"middleware/auth.go", "shared/types.go"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("selectContext() = %#v, want %#v", paths, want)
+	}
+}
+
+func TestSelectContextBudgetsTotalContentBytes(t *testing.T) {
+	t.Parallel()
+
+	files := map[string]struct{}{"app.go": {}}
+	contextFiles := []ContextFile{
+		{Path: "first.go", Content: strings.Repeat("a", MaxContextTotalBytes/2), RelatedTo: []string{"app.go"}},
+		{Path: "second.go", Content: strings.Repeat("b", MaxContextTotalBytes), RelatedTo: []string{"app.go"}},
+	}
+	selected := selectContext(files, contextFiles)
+	if len(selected) != 2 {
+		t.Fatalf("len(selected) = %d, want both files included up to the budget", len(selected))
+	}
+	total := 0
+	for _, file := range selected {
+		total += len(file.Content)
+	}
+	if total > MaxContextTotalBytes+len(contextTruncatedMarker) {
+		t.Fatalf("selected context totals %d bytes, budget %d", total, MaxContextTotalBytes)
+	}
+}
+
+func TestPreparerAttachesRelatedContextToMatchingBatches(t *testing.T) {
+	t.Parallel()
+
+	// Two changed files are large enough to land in separate batches. The
+	// related file points only at a.go, so it must be attached to the a.go
+	// batch and must not be duplicated into the b.go batch.
+	budget := Budget{MaxInputTokens: 400, MaxDiffTokens: 80, MaxStaticFindingTokens: 0}
+	preparer, err := NewPreparer(budget)
+	if err != nil {
+		t.Fatalf("NewPreparer() error = %v", err)
+	}
+	lines := make([]string, 0, 15)
+	for index := 0; index < 15; index++ {
+		lines = append(lines, "changed line with useful context")
+	}
+	changes := change.ChangeSet{Files: []change.FileChange{
+		changedFile("a.go", lines),
+		changedFile("b.go", lines),
+	}}
+	related := []ContextFile{
+		{Path: "shared/auth.go", Content: "func Authenticate() {}", RelatedTo: []string{"a.go"}},
+	}
+
+	prepared, err := preparer.Prepare(stdcontext.Background(), changes, nil, related, testPrompt)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	seenA, seenB := false, false
+	for _, batch := range prepared.Batches {
+		if len(batch.Files) != 1 {
+			t.Fatalf("batch files = %#v, want one file per batch", batch.Files)
+		}
+		if batch.Files[0] == "a.go" {
+			seenA = true
+			if len(batch.RelatedContext) != 1 || batch.RelatedContext[0].Path != "shared/auth.go" {
+				t.Fatalf("a.go batch related context = %#v, want shared/auth.go", batch.RelatedContext)
+			}
+		}
+		if batch.Files[0] == "b.go" {
+			seenB = true
+			if len(batch.RelatedContext) != 0 {
+				t.Fatalf("b.go batch related context = %#v, want none", batch.RelatedContext)
+			}
+		}
+	}
+	if !seenA || !seenB {
+		t.Fatalf("batches missing a.go or b.go: %#v", prepared.Batches)
 	}
 }
 

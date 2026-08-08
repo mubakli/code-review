@@ -177,6 +177,12 @@ func estimateFindings(values []findings.Finding) int {
 	return EstimateTokens(string(encoded))
 }
 
+// selectContext attaches the related context files relevant to one batch. A
+// context file with a non-empty RelatedTo list is attached only when the batch
+// covers one of the changed files it references; a file with an empty
+// RelatedTo (explicitly requested, or resolved without an owner match) is
+// attached to every batch. Total content stays within the per-request byte
+// budget.
 func selectContext(files map[string]struct{}, context []ContextFile) []ContextFile {
 	if len(context) == 0 {
 		return nil
@@ -184,7 +190,7 @@ func selectContext(files map[string]struct{}, context []ContextFile) []ContextFi
 	selected := make([]ContextFile, 0, len(context))
 	total := 0
 	for _, candidate := range context {
-		if _, ok := files[candidate.Path]; !ok {
+		if len(candidate.RelatedTo) > 0 && !relatesToBatch(candidate.RelatedTo, files) {
 			continue
 		}
 		content := truncateBytes(candidate.Content, MaxContextFileBytes)
@@ -196,7 +202,17 @@ func selectContext(files map[string]struct{}, context []ContextFile) []ContextFi
 			content = truncateBytes(content, remaining)
 		}
 		total += len(content)
-		selected = append(selected, ContextFile{Path: candidate.Path, Content: content})
+		selected = append(selected, ContextFile{Path: candidate.Path, Content: content, RelatedTo: candidate.RelatedTo})
 	}
 	return selected
+}
+
+// relatesToBatch reports whether any related changed file is part of the batch.
+func relatesToBatch(relatedTo []string, files map[string]struct{}) bool {
+	for _, path := range relatedTo {
+		if _, ok := files[path]; ok {
+			return true
+		}
+	}
+	return false
 }
