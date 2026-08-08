@@ -6,27 +6,75 @@ import (
 
 	"code-review/internal/ai"
 	aicontext "code-review/internal/ai/context"
+	"code-review/internal/ai/routing"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
 
-func TestRequiresSecurityReviewDetectsKeywordsInAddedLines(t *testing.T) {
+func TestSecurityEscalationPolicySkipsRouterOnKeywordSignal(t *testing.T) {
 	t.Parallel()
 
-	ordinary := addedFile("service.go", []string{"return result"})
-	if ai.RequiresSecurityReview(ordinary) {
-		t.Fatal("RequiresSecurityReview should return false for ordinary changes")
+	scope := &fakePolicyScope{t: t}
+	changes := addedFile("service.go", []string{`password := request.FormValue("password")`})
+	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
 	}
-
-	security := addedFile("service.go", []string{`password := request.FormValue("password")`})
-	if !ai.RequiresSecurityReview(security) {
-		t.Fatal("RequiresSecurityReview should return true for security keyword changes")
+	if !decision.Run {
+		t.Fatal("deterministic keyword signal did not escalate")
+	}
+	if scope.routerRuns != 0 {
+		t.Fatalf("triage router ran %d times, want 0 with a deterministic signal", scope.routerRuns)
 	}
 }
 
-func TestRequiresSecurityReviewIgnoresDeletedLines(t *testing.T) {
+func TestSecurityEscalationPolicySkipsRouterOnSensitivePathSignal(t *testing.T) {
 	t.Parallel()
 
+	scope := &fakePolicyScope{t: t}
+	changes := change.ChangeSet{Files: []change.FileChange{{
+		NewPath: ".env.production",
+		Status:  change.StatusAdded,
+		Hunks: []change.Hunk{{Lines: []change.Line{
+			{Kind: change.LineAdded, NewLine: 1, Content: "NODE_ENV=production"},
+		}}},
+	}}}
+	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if !decision.Run {
+		t.Fatal("deterministic sensitive-path signal did not escalate")
+	}
+	if scope.routerRuns != 0 {
+		t.Fatalf("triage router ran %d times, want 0 with a sensitive path", scope.routerRuns)
+	}
+}
+
+func TestSecurityEscalationPolicySkipsRouterOnEndpointSignal(t *testing.T) {
+	t.Parallel()
+
+	scope := &fakePolicyScope{t: t}
+	changes := addedFile("api.py", []string{`@app.post("/transfer") def transfer():`})
+	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if !decision.Run {
+		t.Fatal("deterministic endpoint signal did not escalate")
+	}
+	if scope.routerRuns != 0 {
+		t.Fatalf("triage router ran %d times, want 0 with an endpoint signal", scope.routerRuns)
+	}
+}
+
+func TestSecurityEscalationPolicyIgnoresDeletedSecurityLines(t *testing.T) {
+	t.Parallel()
+
+	scope := &fakePolicyScope{t: t}
 	changes := change.ChangeSet{Files: []change.FileChange{{
 		NewPath: "service.go",
 		Status:  change.StatusModified,
@@ -35,39 +83,47 @@ func TestRequiresSecurityReviewIgnoresDeletedLines(t *testing.T) {
 			{Kind: change.LineAdded, NewLine: 1, Content: "value = safe"},
 		}}},
 	}}}
-	if ai.RequiresSecurityReview(changes) {
-		t.Fatal("RequiresSecurityReview should ignore deleted security terms")
+	var policy ai.RoutingPolicy = ai.SecurityEscalationPolicy{}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if decision.Run {
+		t.Fatal("deleted security lines must not escalate")
 	}
 }
 
-func TestRequiresSecurityReviewDetectsSensitivePaths(t *testing.T) {
+func TestSecurityEscalationPolicyAcceptsInjectedDetector(t *testing.T) {
 	t.Parallel()
 
-	changes := change.ChangeSet{Files: []change.FileChange{{
-		NewPath: ".env.production",
-		Status:  change.StatusAdded,
-		Hunks: []change.Hunk{{Lines: []change.Line{
-			{Kind: change.LineAdded, NewLine: 1, Content: "NODE_ENV=production"},
-		}}},
-	}}}
-	if !ai.RequiresSecurityReview(changes) {
-		t.Fatal("RequiresSecurityReview should return true for sensitive paths")
+	scope := &fakePolicyScope{t: t}
+	changes := addedFile("service.go", []string{"return result"})
+	detector := fixedSignalDetector{signals: 1}
+	policy := ai.SecurityEscalationPolicy{Detector: detector}
+	decision, err := policy.ShouldRun(context.Background(), changes, nil, &ai.ReviewResult{}, new(int), scope)
+	if err != nil {
+		t.Fatalf("ShouldRun() error = %v", err)
+	}
+	if !decision.Run || scope.routerRuns != 0 {
+		t.Fatalf("injected detector signal did not escalate: decision=%#v routerRuns=%d", decision, scope.routerRuns)
 	}
 }
 
-func TestRequiresSecurityReviewDetectsInjectionSurfaces(t *testing.T) {
-	t.Parallel()
+type fixedSignalDetector struct {
+	signals int
+}
 
-	changes := change.ChangeSet{Files: []change.FileChange{{
-		NewPath: "views/input.gohtml",
-		Status:  change.StatusModified,
-		Hunks: []change.Hunk{{Lines: []change.Line{
-			{Kind: change.LineAdded, NewLine: 1, Content: `innerHTML = qs["name"]`},
-		}}},
-	}}}
-	if !ai.RequiresSecurityReview(changes) {
-		t.Fatal("RequiresSecurityReview should return true for injection surfaces")
+func (d fixedSignalDetector) Detect(change.ChangeSet) []routing.Signal {
+	if d.signals == 0 {
+		return nil
 	}
+	return []routing.Signal{{
+		Kind:       routing.SignalKeyword,
+		Surface:    routing.SurfaceCredentials,
+		Confidence: routing.ConfidenceHigh,
+		File:       "injected.go",
+		Reason:     "injected deterministic signal",
+	}}
 }
 
 func TestSelectAgentsUsesRequestedOrder(t *testing.T) {

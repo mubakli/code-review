@@ -56,9 +56,11 @@ provider only when AI review is explicitly enabled.
 AI review uses selectable specialist agents rather than one unrestricted prompt.
 When enabled, the correctness agent runs for every eligible staged change. The
 security pipeline always evaluates a lightweight triage classifier on the
-redacted diff; the deep security specialist (with related staged-file context)
-is invoked only when deterministic signals or the triage decide to escalate.
-Escalation is fail-closed: any triage error triggers deep review. Each path
+redacted diff; deterministic signal detectors (keyword, path, auth, network,
+database, filesystem, serialization, dependency, endpoint) parse the change set
+first and escalate immediately — the deep security specialist (with related
+staged-file context) runs when a signal, the triage, or any triage error
+triggers it. Escalation is fail-closed. Each path
 receives the same redacted, budgeted diff pipeline; Go assigns the trusted
 `agentId`, filters out-of-scope categories, and merges likely duplicates before
 returning findings.
@@ -166,6 +168,12 @@ configuration will be added with the context engine.
 - `internal/redact` removes secret material before any future provider request.
 - `internal/ai` owns the declarative agent model, routing policies, and
   provider-neutral orchestration.
+- `internal/ai/routing` defines the deterministic signal contract
+  (`SignalDetector`, `Signal`, `SignalKind`, `SecuritySurface`, `Confidence`)
+  and the deduplicating `Aggregate` used by the security escalation policy.
+- `internal/ai/routing/detectors` implements one detector per security domain
+  (keyword, path, auth, network, database, filesystem, serialization,
+  dependency, endpoint); each emits routing signals, never diagnosis.
 - `internal/ai/context` extracts, redacts, token-budgets, and batches a change
   set; it never talks to providers.
 - `internal/ai/request` converts one prepared batch into a provider-neutral

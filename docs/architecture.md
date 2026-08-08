@@ -31,6 +31,12 @@ that routine adapter splits do not make this document stale:
 - `internal/ai` owns the declarative agent model (AgentSpec, roles, routing
   policies) and provider-neutral orchestration of prepare, build, execute,
   validate, and merge.
+- `internal/ai/routing` defines the deterministic signal contract
+  (`Signal`, `SignalKind`, `SecuritySurface`, `Confidence`, `SignalDetector`)
+  and the deduplicating `Aggregate` that policies consult before routing.
+- `internal/ai/routing/detectors` implements one detector per security domain
+  (keyword, path, auth, network, database, filesystem, serialization,
+  dependency, endpoint); each emits routing signals, never diagnosis.
 - `internal/ai/context` extracts, redacts, token-budgets, and batches a change
   set into prepared context. It performs no provider calls.
 - `internal/ai/request` turns one prepared batch into a provider-neutral
@@ -82,6 +88,14 @@ ai
   -> ai/context
   -> ai/request
   -> ai/provider
+  -> ai/routing
+
+ai/routing
+  -> change
+
+ai/routing/detectors
+  -> ai/routing
+  -> change
 
 ai/request
   -> ai/context
@@ -300,9 +314,14 @@ replace the deterministic title, message, or source.
 
 Specialist review agents are provider-neutral values owned by `internal/ai`.
 The correctness agent always reviews every eligible staged change. The security
-pipeline runs a lightweight triage router on every change and escalates to a
-deep security specialist only when deterministic keyword/path signals or the
-router decision require it. Triage routes, it never diagnoses: its `surfaces`
+pipeline runs deterministic signal detectors over the change set and escalates
+to a deep security specialist when a signal or the triage router decision
+require it. The deterministic half of the `SecurityEscalationPolicy` gate is a
+`SignalDetector` aggregate: one detector per domain (keyword, path, auth,
+network, database, filesystem, serialization, dependency, endpoint) converts a
+change set into `Signal` values that name a security surface, a confidence, and
+a reason — routing, never diagnosis. Detectors ignore deleted lines, live in
+`internal/ai/routing`, and are stateless. Triage routes, it never diagnoses: its `surfaces`
 are observables from the diff that the deep agent must examine (data flows,
 control-flow choices, changed boundaries) framed as areas to inspect — never
 confirmed vulnerabilities, because enforcement such as authorization middleware

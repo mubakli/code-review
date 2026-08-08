@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"code-review/internal/ai/context"
+	"code-review/internal/ai/routing"
+	"code-review/internal/ai/routing/detectors"
 	"code-review/internal/change"
 	"code-review/internal/findings"
 )
@@ -65,10 +67,13 @@ type SecurityEscalationPolicy struct {
 	// Router is the triage router consulted before escalation. A zero value
 	// falls back to SecurityTriageRouter.
 	Router AgentSpec
+	// Detector is the deterministic signal source consulted before the router.
+	// A nil detector falls back to the default security detector aggregate.
+	Detector routing.SignalDetector
 }
 
 func (p SecurityEscalationPolicy) ShouldRun(ctx stdcontext.Context, changes change.ChangeSet, staticFindings []findings.Finding, result *ReviewResult, batchIndex *int, scope PolicyScope) (Decision, error) {
-	if RequiresSecurityReview(changes) {
+	if hasDeterministicSignal(p.Detector, changes) {
 		return Decision{Run: true}, nil
 	}
 	router := p.Router
@@ -88,6 +93,32 @@ func (p SecurityEscalationPolicy) ShouldRun(ctx stdcontext.Context, changes chan
 	}
 	return Decision{Run: true, Context: contextFiles}, nil
 }
+
+// hasDeterministicSignal reports whether an injected detector (or the default
+// detector aggregate) found any security signal in the change set. Signal
+// detection is conservative: over-triggering costs tokens, under-triggering
+// silently loses security coverage.
+func hasDeterministicSignal(detector routing.SignalDetector, changes change.ChangeSet) bool {
+	if detector == nil {
+		detector = defaultSecurityDetectors
+	}
+	return len(detector.Detect(changes)) > 0
+}
+
+// defaultSecurityDetectors is the deterministic half of the
+// SecurityEscalationPolicy gate. Each detector owns one security domain and
+// emits signals, never diagnoses.
+var defaultSecurityDetectors = routing.Aggregate{Detectors: []routing.SignalDetector{
+	detectors.KeywordDetector{},
+	detectors.PathDetector{},
+	detectors.AuthDetector{},
+	detectors.NetworkDetector{},
+	detectors.DatabaseDetector{},
+	detectors.FilesystemDetector{},
+	detectors.SerializationDetector{},
+	detectors.DependencyDetector{},
+	detectors.EndpointDetector{},
+}}
 
 func SelectAgents(ids []string) ([]AgentSpec, error) {
 	available := make(map[AgentID]AgentSpec)
@@ -204,90 +235,4 @@ var SecurityTriageRouter = AgentSpec{
 	Prompt:      securityTriagePrompt,
 	Role:        RoleRouter,
 	Policy:      AlwaysRun{},
-}
-
-// RequiresSecurityReview is the deterministic half of the SecurityEscalationPolicy
-// gate: runDeepSecurity = RequiresSecurityReview(changes) || triage-escalate.
-func RequiresSecurityReview(changes change.ChangeSet) bool {
-	for _, file := range changes.Files {
-		path := file.Path()
-		if containsSecurityTerm(path) || isSecuritySensitivePath(path) {
-			return true
-		}
-		for _, hunk := range file.Hunks {
-			for _, line := range hunk.Lines {
-				if line.Kind == change.LineAdded && containsSecurityTerm(line.Content) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-// isSecuritySensitivePath flags credential, configuration, and dependency
-// files whose addition is security-relevant even without a code keyword.
-func isSecuritySensitivePath(path string) bool {
-	lower := strings.ToLower(path)
-	if strings.HasPrefix(lower, ".env") || strings.Contains(lower, "/.env") {
-		return true
-	}
-	for _, suffix := range []string{
-		".env", ".npmrc", ".pypirc", ".netrc", ".aws", ".ssh", ".kubeconfig",
-		".pem", ".key", ".p12", ".pfx", ".jks", "config.yaml", "config.yml",
-		"dockerfile", "containerfile", "credentials", "credential",
-	} {
-		if strings.HasSuffix(lower, suffix) {
-			return true
-		}
-	}
-	for _, marker := range []string{
-		"secret", "credential", "token", "password", "session", "id_rsa", "jwt",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-// containsSecurityTerm reports security-relevant surfaces in an added line or
-// path. A conservative match is intentional: the security agent reports only
-// findings supported by changed-line evidence, so over-triggering costs tokens
-// while under-triggering silently loses security coverage.
-func containsSecurityTerm(value string) bool {
-	value = strings.ToLower(value)
-	for _, term := range []string{
-		// Injection and dynamic execution surfaces.
-		"api_key", "apikey", "auth", "command", "cookie", "credential", "crypto", "1desdecrypt", "encrypt",
-		"header", "jwt", "oauth", "passwd", "password", "permission", "private_key",
-		"request", "secret", "security", "session", "shell", "sql", "token", "upload",
-		"exec.", "exec(", "exec.command", "os/exec", "system(", "eval(", "subprocess",
-		"query", "orm", "raw", "ldap", "xpath", "template", "sprintf", "fprintf", "reflect",
-		"unmarshal", "marshal", "deserialize", "unserialize", "pickle", "yaml",
-		// Identity, sessions, and access control.
-		"authenticate", "authoriz", "role", "acl", "login", "logon", "logout", "signin", "signup",
-		"username", "userid", "csrf", "cors", "origin", "keyring",
-		// Sensitive data and logging.
-		"anonym", "pii", "privacy", "redact", "logger", "logging",
-		// Cryptography.
-		"hash", "hmac", "md5", "sha1", "sha256", "aes", "rsa", "cipher", "nonce",
-		"random", "rand.", "entropy", "pem", "pgp",
-		// File, path, and system integrity.
-		"download", "path", "readdir", "unlink", "removefile", "chmod", "chown",
-		"symlink", "readlink", "realpath", "tmpdir", "tempfile", "zip", "unzip",
-		"archive", "mkdir", "fs.",
-		// Network and client-side.
-		"redirect", "iframe", "innerhtml", "document.", "querystring", "http.", "https.",
-		"url.", "fetch", "curl", "net.", "dial", "listen", "smtp",
-		// Availability and abuse.
-		"ratelimit", "throttle", "quota", "lockout", "brute", "captcha", "regex",
-		// Misc security boundaries.
-		"sudo", "privileges", "proc.", "/proc", "environ", "getenv", "admin",
-	} {
-		if strings.Contains(value, term) {
-			return true
-		}
-	}
-	return false
 }
